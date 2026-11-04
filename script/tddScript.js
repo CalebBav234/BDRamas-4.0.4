@@ -14,6 +14,13 @@ const args = ['--json', '--outputFile=./script/report.json'];
 const DB_DIR = '.tddlab';
 const DB_FILE = 'tddlab.db';
 
+function logError(message, error) {
+  console.error(`[TDD Logging] ${message}`);
+  if (error) {
+    console.error(`  ${error.message}`);
+  }
+}
+
 function runCommand(command, commandArgs) {
   return new Promise((resolve, reject) => {
     const child = spawn(command, commandArgs, {
@@ -69,12 +76,13 @@ async function extractAndAddObject(reportFile, store) {
     jestError = jestError || readError;
   }
 
-  const durationMs =
+  const hasReportTiming =
     report &&
-    typeof report.endTime === 'number' &&
-    typeof report.startTime === 'number'
-      ? report.endTime - report.startTime
-      : null;
+    Number.isFinite(report.startTime) &&
+    Number.isFinite(report.endTime);
+  const durationMs = hasReportTiming
+    ? report.endTime - report.startTime
+    : Date.parse(endTime) - Date.parse(startTime);
 
   const testsPassed = report ? report.numPassedTests : 0;
   const testsFailed = report ? report.numFailedTests : 0;
@@ -171,12 +179,14 @@ async function extractAndAddObject(reportFile, store) {
       branchName: gitContext.branchName,
       workingTreeDirty: gitContext.workingTreeDirty,
       trigger: 'manual',
-      startTime: report
-        ? new Date(report.startTime).toISOString()
-        : startTime,
-      endTime: report
-        ? new Date(report.endTime).toISOString()
-        : endTime,
+      startTime:
+        report && Number.isFinite(report.startTime)
+          ? new Date(report.startTime).toISOString()
+          : startTime,
+      endTime:
+        report && Number.isFinite(report.endTime)
+          ? new Date(report.endTime).toISOString()
+          : endTime,
       durationMs,
       success,
       testsPassed,
@@ -212,8 +222,16 @@ async function extractAndAddObject(reportFile, store) {
         runId
       });
     }
+
+    const databasePath =
+      store.dbPath === ':memory:'
+        ? store.dbPath
+        : path.resolve(store.dbPath);
+    console.log(`[TDD Logging] Run saved to SQLite: runId=${runId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, database=${databasePath}`);
   } catch (persistError) {
     // Persistence failures must not be confused with test failures.
+    // Report to console so the user sees what happened, even if SQLite is broken.
+    logError('Persistence failed — execution was NOT saved to SQLite:', persistError);
     try {
       store.insertEventLog({
         level: 'error',
@@ -248,6 +266,15 @@ async function main() {
     'report.json'
   );
 
+  // Asegurar que el directorio .tddlab existe antes de abrir la base de datos
+  try {
+    fs.mkdirSync(path.join(process.cwd(), DB_DIR), { recursive: true });
+  } catch (mkdirError) {
+    logError('No se pudo crear el directorio .tddlab:', mkdirError);
+    process.exitCode = 1;
+    return;
+  }
+
   const store = new TddStore({
     dbPath: path.join(
       process.cwd(),
@@ -255,6 +282,15 @@ async function main() {
       DB_FILE
     )
   });
+
+  try {
+    store.initialize();
+  } catch (initError) {
+    logError('No se pudo inicializar la base de datos SQLite:', initError);
+    console.error('  Verifique que tiene permisos de escritura en:', process.cwd());
+    process.exitCode = 1;
+    return;
+  }
 
   try {
     const result = await extractAndAddObject(reportFile, store);
@@ -276,9 +312,9 @@ async function main() {
   }
 }
 
-// Jest sets NODE_ENV=test. Therefore, importing this module from a test
-// does not start another Jest process.
-if (process.env.NODE_ENV !== 'test') {
+// Ejecutar solo cuando este archivo es el punto de entrada directo (npm test),
+// no cuando se importa como módulo desde pruebas.
+if (process.argv[1] && path.basename(process.argv[1]) === 'tddScript.js') {
   main().catch((error) => {
     console.error('Unhandled TDD runner error:');
     console.error(error);

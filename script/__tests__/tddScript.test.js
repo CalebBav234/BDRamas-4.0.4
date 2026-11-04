@@ -108,6 +108,23 @@ describe(
     });
 
     it(
+      'debe registrar la ejecucion aunque el reporte de Jest no tenga endTime',
+      async () => {
+        const report = JSON.parse(fs.readFileSync(reportFile, 'utf8'));
+        delete report.endTime;
+        fs.writeFileSync(reportFile, JSON.stringify(report));
+
+        const result = await extractAndAddObject(reportFile, store);
+        const execution = store.getExecutionByRunId(result.runId);
+
+        expect(execution).toBeDefined();
+        expect(Number.isNaN(Date.parse(execution.start_time))).toBe(false);
+        expect(Number.isNaN(Date.parse(execution.end_time))).toBe(false);
+        expect(execution.duration_ms).toBeGreaterThanOrEqual(0);
+      }
+    );
+
+    it(
       'debe manejar Jest fallido sin tratarlo como error de persistencia',
       async () => {
         mockSpawnExit(1);
