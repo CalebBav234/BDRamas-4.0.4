@@ -52,6 +52,13 @@ Durante la instalación se:
 2. Instala las dependencias de desarrollo (Jest, ESLint, Husky, etc.).
 3. Ejecuta `postinstall` que inicializa Git y configura Husky.
 
+La versión más reciente de `better-sqlite3` indicada para esta guía es la
+**13.0.3**, publicada el **5 de agosto**. Este proyecto todavía declara
+`^11.0.0` en `package.json` y fija `11.10.0` en `package-lock.json`; por eso,
+`npm ci` instalará la versión del lockfile, no la 13.0.3. Para usar la versión
+13.0.3 en el proyecto habría que actualizar la dependencia y regenerar el
+lockfile.
+
 Verifica la instalación:
 
 ```bash
