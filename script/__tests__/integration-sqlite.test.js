@@ -6,7 +6,6 @@ import path from 'path';
 import { TddStore } from '../tddStore.js';
 import {
   captureGitContext,
-  getCommitStats,
   getCommitAuthor,
   getCommitDate
 } from '../gitContext.js';
@@ -49,33 +48,25 @@ describe('integracion SQLite - BD basada en archivo', () => {
   });
 
   afterEach(() => {
-    if (store1) {store1.close();}
-    if (store2) {store2.close();}
+    if (store1) { store1.close(); }
+    if (store2) { store2.close(); }
   });
 
   it('debe persistir datos entre dos instancias de TddStore (mismo archivo)', () => {
-    const repoId = store1.ensureRepository({
-      rootPath: '/tmp/repo',
-      remoteUrl: null
-    });
     store1.upsertCommit({
-      commitId: 'sha-persist',
-      repositoryId: repoId,
+      sha: 'sha-persist',
+      parentSha: null,
+      branch: 'main',
       author: 'A',
       message: 'persist',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'success',
-      parents: []
+      committedAt: '2024-01-01T00:00:00Z'
     });
     store1.close();
 
     store2 = new TddStore({ dbPath });
     store2.initialize();
     const row = store2.db
-      .prepare('SELECT * FROM tdd_commit WHERE commit_id = ?')
+      .prepare('SELECT * FROM tdd_commit WHERE sha = ?')
       .get('sha-persist');
     expect(row).toBeDefined();
     expect(row.message).toBe('persist');
@@ -112,7 +103,7 @@ describe('integracion SQLite - flujo completo con Git real', () => {
   });
 
   afterEach(() => {
-    if (store) {store.close();}
+    if (store) { store.close(); }
     removeDir(repoDir);
   });
 
@@ -122,21 +113,8 @@ describe('integracion SQLite - flujo completo con Git real', () => {
     expect(ctx.headSha).toBeDefined();
     expect(ctx.branchName).toBe(defaultBranch);
 
-    const repositoryId = store.ensureRepository({
-      rootPath: ctx.repoRoot,
-      remoteUrl: ctx.remoteUrl
-    });
-
     const parents = ctx.parents || [];
-    let stats = { additions: 0, deletions: 0, total: 0 };
-    try {
-      stats = getCommitStats({
-        parentSha: parents.length > 0 ? parents[0] : null,
-        sha: ctx.headSha
-      });
-    } catch (e) {
-      stats = { additions: 0, deletions: 0, total: 0 };
-    }
+    const parentSha = parents.length > 0 ? parents[0] : null;
 
     let author = null;
     let committedAt = null;
@@ -148,60 +126,36 @@ describe('integracion SQLite - flujo completo con Git real', () => {
     } catch (e) {}
 
     store.upsertCommit({
-      commitId: ctx.headSha,
-      repositoryId,
+      sha: ctx.headSha,
+      parentSha,
+      branch: ctx.branchName,
       author,
       message: ctx.commitMessage || null,
-      committedAt,
-      additions: stats.additions,
-      deletions: stats.deletions,
-      coverage: null,
-      conclusion: 'success',
-      parents
+      committedAt
     });
 
     store.upsertBranch({
-      repositoryId,
       name: ctx.branchName,
-      headSha: ctx.headSha,
-      deletedAt: null
+      forkCommitSha: ctx.headSha
     });
 
-    const runId = store.insertExecution({
-      runId: 'run-flow-1',
-      testId: 1,
-      repositoryId,
-      commitId: ctx.headSha,
-      branchName: ctx.branchName,
-      workingTreeDirty: ctx.workingTreeDirty,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+    const executionId = store.insertExecution({
+      commitSha: ctx.headSha,
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 90.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:05Z'
     });
 
     expect(store.countCommits()).toBe(1);
     expect(store.countExecutions()).toBe(1);
-    const exec = store.getExecutionByRunId(runId);
-    expect(exec.commit_id).toBe(ctx.headSha);
-    expect(exec.branch_name).toBe(defaultBranch);
-    expect(exec.success).toBe(1);
+    const exec = store.getExecutionById(executionId);
+    expect(exec.commit_sha).toBe(ctx.headSha);
+    expect(exec.tests_total).toBe(3);
+    expect(exec.success).toBeUndefined();
 
     const byCommit = store.getExecutionsByCommit(ctx.headSha);
     expect(byCommit.length).toBe(1);
-
-    const byBranch = store.getExecutionsByBranch(defaultBranch);
-    expect(byBranch.length).toBe(1);
-
-    const commitParents = store.getCommitParents(ctx.headSha);
-    expect(Array.isArray(commitParents)).toBe(true);
   });
 
   it('debe registrar merge commit con varios padres', () => {
@@ -225,56 +179,41 @@ describe('integracion SQLite - flujo completo con Git real', () => {
         return;
       }
 
-      const repositoryId = store.ensureRepository({
-        rootPath: ctx.repoRoot,
-        remoteUrl: ctx.remoteUrl
-      });
+      const parents = ctx.parents || [];
+      const parentSha = parents.length > 0 ? parents[0] : null;
+      try {
+        store.upsertCommit({
+          sha: ctx.headSha,
+          parentSha,
+          branch: ctx.branchName,
+          author: 'Test',
+          message: ctx.commitMessage,
+          committedAt: '2024-01-02T00:00:00Z'
+        });
+      } catch (e) {
+        // Si falla por padres faltantes, continuar igual
+      }
 
-    const parents = ctx.parents || [];
-    try {
-      store.upsertCommit({
-        commitId: ctx.headSha,
-        repositoryId,
-        author: 'Test',
-        message: ctx.commitMessage,
-        committedAt: '2024-01-02T00:00:00Z',
-        additions: 0,
-        deletions: 0,
-        coverage: null,
-        conclusion: 'success',
-        parents
-      });
-    } catch (e) {
-      // Si falla por padres faltantes, continuar igual
-    }
-
-    const commitParents = store.getCommitParents(ctx.headSha);
-      expect(Array.isArray(commitParents)).toBe(true);
+      const commit = store.getCommit(ctx.headSha);
+      expect(commit).toBeDefined();
 
       store.insertExecution({
-        runId: 'run-post-merge',
-        testId: 3,
-        repositoryId,
-        commitId: ctx.headSha,
-        branchName: defaultBranch,
-        workingTreeDirty: 0,
-        trigger: 'manual',
-        startTime: '2024-01-02T00:00:00Z',
-        endTime: '2024-01-02T00:00:05Z',
-        durationMs: 5000,
-        success: 1,
+        commitSha: ctx.headSha,
+        testsTotal: 2,
         testsPassed: 2,
         testsFailed: 0,
-        testsTotal: 2,
-        coverage: 80.0,
-        exitCode: 0,
-        failureMessage: null
+        executedAt: '2024-01-02T00:00:05Z'
       });
 
-      const postMerge = store.getExecutionByRunId('run-post-merge');
-      expect(postMerge).toBeDefined();
-      expect(postMerge.run_id).toBe('run-post-merge');
-      expect(postMerge.commit_id).toBe(ctx.headSha);
+      const allExecs = store.db
+        .prepare('SELECT * FROM tdd_execution')
+        .all();
+      expect(allExecs.length).toBeGreaterThanOrEqual(1);
+
+      const lastExec = store.db
+        .prepare('SELECT * FROM tdd_execution ORDER BY id DESC LIMIT 1')
+        .get();
+      expect(lastExec.commit_sha).toBe(ctx.headSha);
     } catch (e) {
       // Si algo falla por problemas de entorno, al menos verificar que el store exista
       expect(store).toBeDefined();

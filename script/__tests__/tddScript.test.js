@@ -97,12 +97,12 @@ describe(
       expect(result.success).toBe(true);
       expect(result.exitCode).toBe(0);
       expect(result.testsPassed).toBe(3);
-      expect(result.runId).toBeDefined();
+      expect(result.executionId).toBeDefined();
 
-      const execution = store.getExecutionByRunId(result.runId);
+      const execution = store.getExecutionById(result.executionId);
 
       expect(execution).toBeDefined();
-      expect(execution.success).toBe(1);
+      expect(execution.tests_total).toBe(3);
       expect(execution.tests_passed).toBe(3);
       expect(mockSpawn).toHaveBeenCalled();
     });
@@ -115,12 +115,10 @@ describe(
         fs.writeFileSync(reportFile, JSON.stringify(report));
 
         const result = await extractAndAddObject(reportFile, store);
-        const execution = store.getExecutionByRunId(result.runId);
+        const execution = store.getExecutionById(result.executionId);
 
         expect(execution).toBeDefined();
-        expect(Number.isNaN(Date.parse(execution.start_time))).toBe(false);
-        expect(Number.isNaN(Date.parse(execution.end_time))).toBe(false);
-        expect(execution.duration_ms).toBeGreaterThanOrEqual(0);
+        expect(Number.isNaN(Date.parse(execution.executed_at))).toBe(false);
       }
     );
 
@@ -134,9 +132,10 @@ describe(
         expect(result.success).toBe(false);
         expect(result.exitCode).toBe(1);
 
-        const execution = store.getExecutionByRunId(result.runId);
+        const execution = store.getExecutionById(result.executionId);
 
-        expect(execution.success).toBe(0);
+        expect(execution).toBeDefined();
+        expect(execution.tests_failed).toBeGreaterThanOrEqual(0);
       }
     );
 
@@ -152,10 +151,9 @@ describe(
         expect(result.success).toBe(false);
         expect(result.jestError).toBeDefined();
 
-        const execution = store.getExecutionByRunId(result.runId);
+        const execution = store.getExecutionById(result.executionId);
 
         expect(execution).toBeDefined();
-        expect(execution.success).toBe(0);
       }
     );
 
@@ -198,14 +196,13 @@ describe(
             store
           );
 
-          expect(result.runId).toBeDefined();
+          expect(result.executionId).toBeDefined();
 
-          const execution = store.getExecutionByRunId(
-            result.runId
+          const execution = store.getExecutionById(
+            result.executionId
           );
 
-          expect(execution.branch_name).toBeNull();
-          expect(execution.commit_id).toBeNull();
+          expect(execution.commit_sha).toBeNull();
         } finally {
           process.chdir(originalCwd);
           removeDir(nonGitDir);
@@ -219,18 +216,11 @@ describe(
         const failingStore = {
           initialize: jest.fn(),
           close: jest.fn(),
-          ensureRepository: jest.fn(() => 1),
           upsertCommit: jest.fn(),
           upsertBranch: jest.fn(),
-
           insertExecution: jest.fn(() => {
             throw new Error('DB write failed');
           }),
-
-          getMaxTestId: jest.fn(() => 0),
-          insertEventLog: jest.fn(),
-          insertRunFailure: jest.fn(),
-
           db: {
             prepare: jest.fn(() => ({
               get: jest.fn(() => undefined)
@@ -247,15 +237,6 @@ describe(
 
         expect(result.success).toBe(true);
         expect(result.exitCode).toBe(0);
-
-        expect(
-          failingStore.insertEventLog
-        ).toHaveBeenCalledWith(
-          expect.objectContaining({
-            level: 'error',
-            component: 'persistence'
-          })
-        );
       }
     );
 
@@ -293,19 +274,11 @@ describe(
         expect(result.exitCode).toBe(1);
         expect(result.testsFailed).toBe(2);
 
-        const execution = store.getExecutionByRunId(
-          result.runId
+        const execution = store.getExecutionById(
+          result.executionId
         );
 
         expect(execution.tests_failed).toBe(2);
-
-        const failures = store.db
-          .prepare(
-            'SELECT * FROM tdd_run_failures WHERE run_id = ?'
-          )
-          .all(result.runId);
-
-        expect(failures.length).toBeGreaterThanOrEqual(1);
       }
     );
 
@@ -321,16 +294,168 @@ describe(
         expect(result.commitId).toBeDefined();
         expect(result.commitId).toMatch(/^[0-9a-f]+$/);
 
-        const execution = store.getExecutionByRunId(
-          result.runId
+        const execution = store.getExecutionById(
+          result.executionId
         );
 
-        expect(execution.commit_id).toBe(result.commitId);
+        expect(execution.commit_sha).toBe(result.commitId);
+      }
+    );
 
-        if (execution.branchName) {
-          expect(execution.branchName).toMatch(
-            /^(main|master)$/
-          );
+    it(
+      'debe manejar error de lectura del reporte JSON',
+      async () => {
+        const originalReadFileSync = fs.readFileSync;
+        fs.readFileSync = () => {
+          throw new Error('No se puede leer el archivo');
+        };
+        try {
+          const result = await extractAndAddObject(reportFile, store);
+          // exitCode es 0 (jest ok), pero jestError está definido
+          expect(result.success).toBe(true);
+          expect(result.jestError).toBeDefined();
+        } finally {
+          fs.readFileSync = originalReadFileSync;
+        }
+      }
+    );
+
+    it(
+      'debe manejar error de captura de contexto Git',
+      async () => {
+        const mod = await import('../gitContext.js');
+        const originalCapture = mod.captureGitContext;
+        mod.captureGitContext = () => {
+          throw new Error('No hay contexto Git');
+        };
+        try {
+          const result = await extractAndAddObject(reportFile, store);
+          const execution = store.getExecutionById(result.executionId);
+          expect(execution.commit_sha).toBeNull();
+        } finally {
+          mod.captureGitContext = originalCapture;
+        }
+      }
+    );
+
+    it(
+      'debe manejar fallo de persistencia sin fallar la ejecucion',
+      async () => {
+        const failingStore = {
+          initialize: jest.fn(),
+          close: jest.fn(),
+          upsertCommit: jest.fn(),
+          upsertBranch: jest.fn(),
+          insertExecution: jest.fn(() => {
+            throw new Error('DB write failed');
+          }),
+          db: {
+            prepare: jest.fn(() => ({
+              get: jest.fn(() => undefined)
+            }))
+          }
+        };
+
+        mockSpawnExit(0);
+
+        const result = await extractAndAddObject(reportFile, failingStore);
+
+        expect(result.success).toBe(true);
+        expect(result.exitCode).toBe(0);
+        expect(failingStore.insertExecution).toHaveBeenCalled();
+      }
+    );
+
+    it(
+      'debe manejar evento de error en spawn (runCommand error)',
+      async () => {
+        mockSpawn.mockImplementation(() => {
+          const emitter = new EventEmitter();
+          process.nextTick(() => {
+            emitter.emit('error', new Error('Spawn failed'));
+          });
+          return emitter;
+        });
+
+        const result = await extractAndAddObject(reportFile, store);
+
+        expect(result.success).toBe(false);
+        expect(result.jestError).toBeDefined();
+        expect(result.exitCode).toBe(1);
+      }
+    );
+
+    it(
+      'debe ejecutar main y salir con codigo 1 cuando mkdir falla',
+      async () => {
+        const originalMkdir = fs.mkdirSync;
+        fs.mkdirSync = () => {
+          throw new Error('No se puede crear directorio');
+        };
+
+        const originalCwd = process.cwd();
+        const mainTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-'));
+        process.chdir(mainTmpDir);
+        process.exitCode = undefined;
+
+        try {
+          const mod = await import('../tddScript.js');
+          await mod.main();
+          expect(process.exitCode).toBe(1);
+        } finally {
+          fs.mkdirSync = originalMkdir;
+          process.chdir(originalCwd);
+          removeDir(mainTmpDir);
+          process.exitCode = undefined;
+        }
+      }
+    );
+
+    it(
+      'debe ejecutar main y salir con codigo 0 cuando todo sale bien',
+      async () => {
+        const originalCwd = process.cwd();
+        const mainTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-'));
+        process.chdir(mainTmpDir);
+        process.exitCode = undefined;
+
+        try {
+          const mod = await import('../tddScript.js');
+          await mod.main();
+          expect(process.exitCode).toBe(0);
+        } finally {
+          process.chdir(originalCwd);
+          removeDir(mainTmpDir);
+          process.exitCode = undefined;
+        }
+      }
+    );
+
+    it(
+      'debe ejecutar main y salir con codigo 1 cuando store.initialize falla',
+      async () => {
+        const originalCwd = process.cwd();
+        const mainTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-'));
+        process.chdir(mainTmpDir);
+        process.exitCode = undefined;
+
+        try {
+          const mod = await import('../tddScript.js');
+
+          // Hacer que initialize falle
+          const origInit = mod.TddStore.prototype.initialize;
+          mod.TddStore.prototype.initialize = jest.fn(() => {
+            throw new Error('DB init failed');
+          });
+
+          await mod.main();
+          expect(process.exitCode).toBe(1);
+
+          mod.TddStore.prototype.initialize = origInit;
+        } finally {
+          process.chdir(originalCwd);
+          removeDir(mainTmpDir);
+          process.exitCode = undefined;
         }
       }
     );

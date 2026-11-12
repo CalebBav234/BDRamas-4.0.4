@@ -1,7 +1,6 @@
 import { TddStore } from './tddStore.js';
 import {
   captureGitContext,
-  getCommitStats,
   getCommitAuthor,
   getCommitDate
 } from './gitContext.js';
@@ -22,45 +21,28 @@ function main() {
     const ctx = captureGitContext();
 
     if (!ctx.inGitRepo || !ctx.headSha) {
-      // No hay repositorio Git ni commit: no hay nada que registrar.
       process.exit(0);
     }
 
-    const repositoryId = store.ensureRepository({
-      rootPath: ctx.repoRoot || process.cwd(),
-      remoteUrl: ctx.remoteUrl
-    });
-
     const parents = ctx.parents || [];
-    const stats = getCommitStats({
-      parentSha: parents[0] || null,
-      sha: ctx.headSha
-    });
+    const parentSha = parents.length > 0 ? parents[0] : null;
 
     const author = getCommitAuthor({ sha: ctx.headSha }) || null;
     const committedAt = getCommitDate({ sha: ctx.headSha }) || null;
 
-    // SHA real como identificador de commit. Nunca se usa el literal 'HEAD'.
     store.upsertCommit({
-      commitId: ctx.headSha,
-      repositoryId,
+      sha: ctx.headSha,
+      parentSha: parentSha || null,
+      branch: ctx.branchName || null,
       author,
       message: ctx.commitMessage || null,
-      committedAt,
-      additions: stats.additions,
-      deletions: stats.deletions,
-      coverage: null,
-      conclusion: 'success',
-      parents
+      committedAt
     });
 
-    // Registrar/actualizar rama solo si hay nombre (detached HEAD no tiene rama).
     if (ctx.branchName) {
       store.upsertBranch({
-        repositoryId,
         name: ctx.branchName,
-        headSha: ctx.headSha,
-        deletedAt: null
+        forkCommitSha: ctx.headSha
       });
     }
 
@@ -77,12 +59,11 @@ function main() {
   }
 }
 
-// No auto-ejecutar al importarse en entorno de pruebas.
 if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
   try {
     main();
   } catch (e) {
-    // Si falla al importar en tests, no romper el suite
+    // Silenciar errores durante import en tests
   }
 }
 

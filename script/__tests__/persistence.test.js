@@ -1,18 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
 import { TddStore } from '../tddStore.js';
-import { getLastTestId } from '../id_execution_tests_commit.js';
+import { getLastExecutionId } from '../id_execution_tests_commit.js';
 
-describe('getLastTestId sobre SQLite', () => {
+describe('getLastExecutionId sobre SQLite', () => {
   let store;
-  let repoId;
 
   beforeEach(() => {
     store = new TddStore({ dbPath: ':memory:' });
     store.initialize();
-    repoId = store.ensureRepository({
-      rootPath: '/tmp/test-repo',
-      remoteUrl: null
-    });
   });
 
   afterEach(() => {
@@ -20,104 +15,48 @@ describe('getLastTestId sobre SQLite', () => {
   });
 
   it('debe devolver 1 cuando no hay ejecuciones previas', () => {
-    const next = getLastTestId(store);
+    const next = getLastExecutionId(store);
     expect(next).toBe(1);
   });
 
-  it('debe devolver max(test_id) + 1 por rama', () => {
+  it('debe devolver max(id) + 1', () => {
     store.insertExecution({
-      runId: 'run-a',
-      testId: 2,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+      commitSha: null,
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(getLastTestId(store, 'main')).toBe(3);
-  });
+    expect(getLastExecutionId(store)).toBe(2);
 
-  it('debe aislar contadores de test_id por rama', () => {
     store.insertExecution({
-      runId: 'run-main',
-      testId: 4,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+      commitSha: null,
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
-    store.insertExecution({
-      runId: 'run-feat',
-      testId: 7,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: 'feature-a',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
-      testsPassed: 3,
-      testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
-    });
-    expect(getLastTestId(store, 'main')).toBe(5);
-    expect(getLastTestId(store, 'feature-a')).toBe(8);
+    expect(getLastExecutionId(store)).toBe(3);
   });
 
   it('debe funcionar cuando se crea una instancia temporal (sin store)', () => {
-    // No hay tablas aun en esta instancia nueva; getMaxTestId devuelve 0
-    expect(getLastTestId(null, 'main')).toBe(1);
+    expect(getLastExecutionId(null)).toBe(1);
   });
 });
 
-describe('tddStore - integridad referencial y unicidad', () => {
+describe('tddStore - integridad y unicidad', () => {
   let store;
-  let repoId;
 
   beforeEach(() => {
     store = new TddStore({ dbPath: ':memory:' });
     store.initialize();
-    repoId = store.ensureRepository({
-      rootPath: '/tmp/test-repo',
-      remoteUrl: null
-    });
     store.upsertCommit({
-      commitId: 'sha-valid',
-      repositoryId: repoId,
+      sha: 'sha-valid',
+      parentSha: null,
+      branch: 'main',
       author: 'A',
       message: 'valido',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'neutral',
-      parents: []
+      committedAt: '2024-01-01T00:00:00Z'
     });
   });
 
@@ -125,153 +64,67 @@ describe('tddStore - integridad referencial y unicidad', () => {
     store.close();
   });
 
-  it('debe generar run_id unicos (UUID)', () => {
+  it('debe generar ids unicos (autoincrement)', () => {
     const ids = new Set();
     for (let i = 0; i < 50; i++) {
-      const runId = store.insertExecution({
-        runId: crypto.randomUUID(),
-        testId: i,
-        repositoryId: repoId,
-        commitId: 'sha-valid',
-        branchName: 'main',
-        workingTreeDirty: 0,
-        trigger: 'manual',
-        startTime: '2024-01-01T00:00:00Z',
-        endTime: '2024-01-01T00:00:05Z',
-        durationMs: 5000,
-        success: 1,
+      const id = store.insertExecution({
+        commitSha: 'sha-valid',
+        testsTotal: 3,
         testsPassed: 3,
         testsFailed: 0,
-        testsTotal: 3,
-        coverage: 85.0,
-        exitCode: 0,
-        failureMessage: null
+        executedAt: '2024-01-01T00:00:00Z'
       });
-      ids.add(runId);
+      ids.add(id);
     }
     expect(ids.size).toBe(50);
   });
 
-  it('debe aceptar commit_id valido con foreign key', () => {
-    const runId = store.insertExecution({
-      runId: 'run-fk-ok',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: 'sha-valid',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+  it('debe aceptar commit_sha valido', () => {
+    const id = store.insertExecution({
+      commitSha: 'sha-valid',
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(runId).toBe('run-fk-ok');
+    expect(id).toBeGreaterThan(0);
     const row = store.db
-      .prepare('SELECT commit_id FROM tdd_execution WHERE run_id = ?')
-      .get(runId);
-    expect(row.commit_id).toBe('sha-valid');
+      .prepare('SELECT commit_sha FROM tdd_execution WHERE id = ?')
+      .get(id);
+    expect(row.commit_sha).toBe('sha-valid');
   });
 
-  it('debe aceptar commit_id NULL (ejecucion manual)', () => {
-    const runId = store.insertExecution({
-      runId: 'run-manual',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: null,
-      workingTreeDirty: 1,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 0,
+  it('debe aceptar commit_sha NULL (ejecucion manual)', () => {
+    const id = store.insertExecution({
+      commitSha: null,
+      testsTotal: 1,
       testsPassed: 0,
       testsFailed: 1,
-      testsTotal: 1,
-      coverage: null,
-      exitCode: 1,
-      failureMessage: 'infraestructura'
+      executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(runId).toBe('run-manual');
-    const row = store.getExecutionByRunId('run-manual');
-    expect(row.commit_id).toBeNull();
-    expect(row.branch_name).toBeNull();
+    expect(id).toBeGreaterThan(0);
+    const row = store.getExecutionById(id);
+    expect(row.commit_sha).toBeNull();
   });
 
-  it('debe rechazar un commit_id inexistente (restriccion foreign key)', () => {
-    expect(() => {
-      store.insertExecution({
-        runId: 'run-bad-fk',
-        testId: 1,
-        repositoryId: repoId,
-        commitId: 'sha-inexistente',
-        branchName: 'main',
-        workingTreeDirty: 0,
-        trigger: 'manual',
-        startTime: '2024-01-01T00:00:00Z',
-        endTime: '2024-01-01T00:00:05Z',
-        durationMs: 5000,
-        success: 1,
-        testsPassed: 3,
-        testsFailed: 0,
-        testsTotal: 3,
-        coverage: 85.0,
-        exitCode: 0,
-        failureMessage: null
-      });
-    }).toThrow();
-  });
-
-  it('debe consultar ejecuciones por commit, rama y run_id', () => {
+  it('debe consultar ejecuciones por commit y por id', () => {
     store.insertExecution({
-      runId: 'run-q1',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: 'sha-valid',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+      commitSha: 'sha-valid',
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
     store.insertExecution({
-      runId: 'run-q2',
-      testId: 2,
-      repositoryId: repoId,
-      commitId: 'sha-valid',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 0,
+      commitSha: 'sha-valid',
+      testsTotal: 3,
       testsPassed: 2,
       testsFailed: 1,
-      testsTotal: 3,
-      coverage: 80.0,
-      exitCode: 1,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:05Z'
     });
 
     expect(store.getExecutionsByCommit('sha-valid').length).toBe(2);
-    expect(store.getExecutionsByBranch('main').length).toBe(2);
-    expect(store.getExecutionByRunId('run-q1').run_id).toBe('run-q1');
-    expect(store.getExecutionByRunId('run-q2').run_id).toBe('run-q2');
+    expect(store.getExecutionById(1).id).toBe(1);
+    expect(store.getExecutionById(2).id).toBe(2);
   });
 });

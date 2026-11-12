@@ -3,23 +3,12 @@ import { TddStore } from '../tddStore.js';
 
 describe('tddStore - inicializacion y esquema SQLite', () => {
   let store;
-  let repoId;
 
   beforeEach(() => {
     store = new TddStore({ dbPath: ':memory:' });
     try {
       store.initialize();
-      repoId = store.ensureRepository({
-        rootPath: '/tmp/test-repo',
-        remoteUrl: 'https://github.com/owner/repo.git'
-      });
-    } catch (e) {
-      try {
-        repoId = store.db.prepare('INSERT INTO tdd_repository (root_path, remote_url) VALUES (?, ?)').run('/tmp/test-repo', 'https://github.com/owner/repo.git').lastInsertRowid;
-      } catch (e2) {
-        repoId = 1;
-      }
-    }
+    } catch (e) {}
   });
 
   afterEach(() => {
@@ -28,15 +17,12 @@ describe('tddStore - inicializacion y esquema SQLite', () => {
     } catch {}
   });
 
-  it('debe crear las tablas obligatorias del esquema', () => {
+  it('debe crear las 4 tablas obligatorias del esquema', () => {
     const expectedTables = [
-      'tdd_repository',
       'tdd_branch',
       'tdd_commit',
-      'tdd_commit_parent',
+      'tdd_merge',
       'tdd_execution',
-      'tdd_run_failures',
-      'tdd_event_log',
       'tdd_schema_migration'
     ];
 
@@ -73,113 +59,80 @@ describe('tddStore - inicializacion y esquema SQLite', () => {
     expect(store2.db).toBeDefined();
     store2.close();
   });
-
-  it('debe crear un repositorio y devolver su id', () => {
-    expect(repoId).toBeGreaterThan(0);
-    const row = store.db
-      .prepare('SELECT * FROM tdd_repository WHERE id = ?')
-      .get(repoId);
-    expect(row.root_path).toBe('/tmp/test-repo');
-    expect(row.remote_url).toBe('https://github.com/owner/repo.git');
-  });
-
-  it('debe ser idempotente al registrar el mismo repositorio (misma root_path)', () => {
-    const id2 = store.ensureRepository({
-      rootPath: '/tmp/test-repo',
-      remoteUrl: 'https://github.com/owner/repo.git'
-    });
-    expect(id2).toBe(repoId);
-  });
-
-  it('debe crear una rama y devolver su id', () => {
-    const branchId = store.upsertBranch({
-      repositoryId: repoId,
-      name: 'main',
-      headSha: 'abc123',
-      deletedAt: null
-    });
-    expect(branchId).toBeGreaterThan(0);
-
-    const row = store.db
-      .prepare('SELECT * FROM tdd_branch WHERE id = ?')
-      .get(branchId);
-    expect(row.name).toBe('main');
-    expect(row.head_sha).toBe('abc123');
-    expect(row.deleted_at).toBeNull();
-  });
-
-  it('debe actualizar una rama existente en lugar de duplicarla', () => {
-    const id1 = store.upsertBranch({
-      repositoryId: repoId,
-      name: 'main',
-      headSha: 'sha1',
-      deletedAt: null
-    });
-    const id2 = store.upsertBranch({
-      repositoryId: repoId,
-      name: 'main',
-      headSha: 'sha2',
-      deletedAt: null
-    });
-    expect(id1).toBe(id2);
-    const row = store.db
-      .prepare('SELECT head_sha FROM tdd_branch WHERE id = ?')
-      .get(id1);
-    expect(row.head_sha).toBe('sha2');
-  });
-
-  it('debe permitir ramas con el mismo nombre en repositorios distintos', () => {
-    const repo2 = store.ensureRepository({
-      rootPath: '/tmp/test-repo-2',
-      remoteUrl: null
-    });
-    const b1 = store.upsertBranch({
-      repositoryId: repoId,
-      name: 'main',
-      headSha: 'sha1',
-      deletedAt: null
-    });
-    const b2 = store.upsertBranch({
-      repositoryId: repo2,
-      name: 'main',
-      headSha: 'sha2',
-      deletedAt: null
-    });
-    expect(b1).not.toBe(b2);
-  });
-
-  it('debe marcar una rama como eliminada sin borrarla', () => {
-    const branchId = store.upsertBranch({
-      repositoryId: repoId,
-      name: 'feature-x',
-      headSha: 'sha-x',
-      deletedAt: null
-    });
-    const now = new Date().toISOString();
-    store.upsertBranch({
-      repositoryId: repoId,
-      name: 'feature-x',
-      headSha: 'sha-x',
-      deletedAt: now
-    });
-    const row = store.db
-      .prepare('SELECT deleted_at FROM tdd_branch WHERE id = ?')
-      .get(branchId);
-    expect(row.deleted_at).toBe(now);
-  });
 });
 
-describe('tddStore - commits y padres (DAG de Git)', () => {
+describe('tddStore - ramas', () => {
   let store;
-  let repoId;
 
   beforeEach(() => {
     store = new TddStore({ dbPath: ':memory:' });
     store.initialize();
-    repoId = store.ensureRepository({
-      rootPath: '/tmp/test-repo',
-      remoteUrl: null
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  it('debe crear una rama y devolver su nombre', () => {
+    const name = store.upsertBranch({
+      name: 'main',
+      forkCommitSha: 'abc123'
     });
+    expect(name).toBe('main');
+
+    const row = store.db
+      .prepare('SELECT * FROM tdd_branch WHERE name = ?')
+      .get('main');
+    expect(row.name).toBe('main');
+    expect(row.fork_commit_sha).toBe('abc123');
+  });
+
+  it('debe actualizar una rama existente en lugar de duplicarla', () => {
+    const n1 = store.upsertBranch({
+      name: 'main',
+      forkCommitSha: 'sha1'
+    });
+    const n2 = store.upsertBranch({
+      name: 'main',
+      forkCommitSha: 'sha2'
+    });
+    expect(n1).toBe(n2);
+    const row = store.db
+      .prepare('SELECT fork_commit_sha FROM tdd_branch WHERE name = ?')
+      .get('main');
+    expect(row.fork_commit_sha).toBe('sha2');
+  });
+
+  it('debe obtener una rama por nombre', () => {
+    store.upsertBranch({
+      name: 'feature-x',
+      forkCommitSha: 'sha-x'
+    });
+    const row = store.getBranch('feature-x');
+    expect(row).toBeDefined();
+    expect(row.name).toBe('feature-x');
+    expect(row.fork_commit_sha).toBe('sha-x');
+  });
+
+  it('debe crear una rama sin fork_commit_sha (valor nulo)', () => {
+    const name = store.upsertBranch({
+      name: 'no-fork',
+      forkCommitSha: null
+    });
+    expect(name).toBe('no-fork');
+    const row = store.db
+      .prepare('SELECT fork_commit_sha FROM tdd_branch WHERE name = ?')
+      .get('no-fork');
+    expect(row.fork_commit_sha).toBeNull();
+  });
+});
+
+describe('tddStore - commits', () => {
+  let store;
+
+  beforeEach(() => {
+    store = new TddStore({ dbPath: ':memory:' });
+    store.initialize();
   });
 
   afterEach(() => {
@@ -188,535 +141,264 @@ describe('tddStore - commits y padres (DAG de Git)', () => {
 
   it('debe insertar un commit sin padres (commit raiz)', () => {
     store.upsertCommit({
-      commitId: 'sha-root',
-      repositoryId: repoId,
+      sha: 'sha-root',
+      parentSha: null,
+      branch: 'main',
       author: 'Autor',
       message: 'commit raiz',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 10,
-      deletions: 2,
-      coverage: 80.5,
-      conclusion: 'success',
-      parents: []
+      committedAt: '2024-01-01T00:00:00Z'
     });
     const row = store.db
-      .prepare('SELECT * FROM tdd_commit WHERE commit_id = ?')
+      .prepare('SELECT * FROM tdd_commit WHERE sha = ?')
       .get('sha-root');
     expect(row.author).toBe('Autor');
     expect(row.message).toBe('commit raiz');
-    expect(row.conclusion).toBe('success');
+    expect(row.parent_sha).toBeNull();
 
-    const parents = store.getCommitParents('sha-root');
-    expect(parents).toEqual([]);
+    const commit = store.getCommit('sha-root');
+    expect(commit).toBeDefined();
+    expect(commit.sha).toBe('sha-root');
   });
 
   it('debe insertar un commit con un padre (rama lineal)', () => {
     store.upsertCommit({
-      commitId: 'sha-parent',
-      repositoryId: repoId,
+      sha: 'sha-parent',
+      parentSha: null,
+      branch: 'main',
       author: 'A',
       message: 'padre',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'neutral',
-      parents: []
+      committedAt: '2024-01-01T00:00:00Z'
     });
     store.upsertCommit({
-      commitId: 'sha-child',
-      repositoryId: repoId,
+      sha: 'sha-child',
+      parentSha: 'sha-parent',
+      branch: 'main',
       author: 'B',
       message: 'hijo',
-      committedAt: '2024-01-02T00:00:00Z',
-      additions: 5,
-      deletions: 1,
-      coverage: 90.0,
-      conclusion: 'success',
-      parents: ['sha-parent']
+      committedAt: '2024-01-02T00:00:00Z'
     });
-    const parents = store.getCommitParents('sha-child');
-    expect(parents).toEqual(['sha-parent']);
-  });
-
-  it('debe representar un merge commit con varios padres', () => {
-    store.upsertCommit({
-      commitId: 'sha-a',
-      repositoryId: repoId,
-      author: 'A',
-      message: 'rama A',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'neutral',
-      parents: []
-    });
-    store.upsertCommit({
-      commitId: 'sha-b',
-      repositoryId: repoId,
-      author: 'B',
-      message: 'rama B',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'neutral',
-      parents: []
-    });
-    store.upsertCommit({
-      commitId: 'sha-merge',
-      repositoryId: repoId,
-      author: 'C',
-      message: 'Merge rama B en A',
-      committedAt: '2024-01-02T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'success',
-      parents: ['sha-a', 'sha-b']
-    });
-    const parents = store.getCommitParents('sha-merge');
-    expect(parents).toEqual(['sha-a', 'sha-b']);
+    const commit = store.getCommit('sha-child');
+    expect(commit.parent_sha).toBe('sha-parent');
   });
 
   it('debe actualizar un commit existente en lugar de duplicarlo', () => {
     store.upsertCommit({
-      commitId: 'sha-upd',
-      repositoryId: repoId,
+      sha: 'sha-upd',
+      parentSha: null,
+      branch: 'main',
       author: 'A',
       message: 'original',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'neutral',
-      parents: []
+      committedAt: '2024-01-01T00:00:00Z'
     });
     store.upsertCommit({
-      commitId: 'sha-upd',
-      repositoryId: repoId,
+      sha: 'sha-upd',
+      parentSha: null,
+      branch: 'main',
       author: 'B',
       message: 'actualizado',
-      committedAt: '2024-01-02T00:00:00Z',
-      additions: 3,
-      deletions: 0,
-      coverage: 100.0,
-      conclusion: 'success',
-      parents: []
+      committedAt: '2024-01-02T00:00:00Z'
     });
     const row = store.db
-      .prepare('SELECT message, additions, conclusion FROM tdd_commit WHERE commit_id = ?')
+      .prepare('SELECT message, author FROM tdd_commit WHERE sha = ?')
       .get('sha-upd');
     expect(row.message).toBe('actualizado');
-    expect(row.additions).toBe(3);
-    expect(row.conclusion).toBe('success');
+    expect(row.author).toBe('B');
   });
 
   it('debe contar commits registrados', () => {
     expect(store.countCommits()).toBe(0);
     store.upsertCommit({
-      commitId: 'sha-1',
-      repositoryId: repoId,
+      sha: 'sha-1',
+      parentSha: null,
+      branch: 'main',
       author: 'A',
       message: 'm1',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'neutral',
-      parents: []
+      committedAt: '2024-01-01T00:00:00Z'
     });
     expect(store.countCommits()).toBe(1);
+  });
+
+  it('debe insertar un commit con todos los campos opcionales nulos', () => {
+    store.upsertCommit({
+      sha: 'sha-nulls',
+      parentSha: null,
+      branch: null,
+      author: null,
+      message: null,
+      committedAt: null
+    });
+    const row = store.db
+      .prepare('SELECT * FROM tdd_commit WHERE sha = ?')
+      .get('sha-nulls');
+    expect(row.parent_sha).toBeNull();
+    expect(row.branch).toBeNull();
+    expect(row.author).toBeNull();
+    expect(row.message).toBeNull();
+    expect(row.committed_at).toBeNull();
+  });
+});
+
+describe('tddStore - merges', () => {
+  let store;
+
+  beforeEach(() => {
+    store = new TddStore({ dbPath: ':memory:' });
+    store.initialize();
+  });
+
+  afterEach(() => {
+    store.close();
+  });
+
+  it('debe registrar un merge entre ramas', () => {
+    store.recordMerge({
+      sourceBranch: 'feature',
+      targetBranch: 'main',
+      sourceCommitSha: 'sha-feature',
+      mergeCommitSha: 'sha-merge',
+      isFastForward: false,
+      mergedAt: '2024-01-02T00:00:00Z'
+    });
+
+    const merges = store.getMerges();
+    expect(merges.length).toBe(1);
+    expect(merges[0].source_branch).toBe('feature');
+    expect(merges[0].target_branch).toBe('main');
+    expect(merges[0].is_fast_forward).toBe(0);
+  });
+
+  it('debe registrar un merge fast-forward', () => {
+    store.recordMerge({
+      sourceBranch: 'feature',
+      targetBranch: 'main',
+      sourceCommitSha: 'sha-feature',
+      mergeCommitSha: 'sha-merge',
+      isFastForward: true
+    });
+
+    const merges = store.getMerges();
+    expect(merges[0].is_fast_forward).toBe(1);
   });
 });
 
 describe('tddStore - ejecuciones de pruebas', () => {
   let store;
-  let repoId;
 
   beforeEach(() => {
     store = new TddStore({ dbPath: ':memory:' });
     store.initialize();
-    repoId = store.ensureRepository({
-      rootPath: '/tmp/test-repo',
-      remoteUrl: null
-    });
-    store.upsertCommit({
-      commitId: 'sha-c1',
-      repositoryId: repoId,
-      author: 'A',
-      message: 'commit c1',
-      committedAt: '2024-01-01T00:00:00Z',
-      additions: 0,
-      deletions: 0,
-      coverage: null,
-      conclusion: 'neutral',
-      parents: []
-    });
   });
 
   afterEach(() => {
     store.close();
   });
 
-  it('debe insertar una ejecucion y devolver su run_id', () => {
-    const runId = store.insertExecution({
-      runId: 'run-uuid-1',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: 'sha-c1',
-      branchName: 'main',
-      workingTreeDirty: false,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+  it('debe insertar una ejecucion y devolver su id', () => {
+    const id = store.insertExecution({
+      commitSha: 'sha-c1',
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(runId).toBe('run-uuid-1');
+    expect(id).toBeGreaterThan(0);
 
     const row = store.db
-      .prepare('SELECT * FROM tdd_execution WHERE run_id = ?')
-      .get(runId);
-    expect(row.test_id).toBe(1);
-    expect(row.branch_name).toBe('main');
-    expect(row.success).toBe(1);
+      .prepare('SELECT * FROM tdd_execution WHERE id = ?')
+      .get(id);
+    expect(row.tests_total).toBe(3);
     expect(row.tests_passed).toBe(3);
-    expect(row.exit_code).toBe(0);
+    expect(row.tests_failed).toBe(0);
+    expect(row.commit_sha).toBe('sha-c1');
   });
 
-  it('debe permitir commit_id NULL para ejecuciones manuales sin commit', () => {
-    const runId = store.insertExecution({
-      runId: 'run-manual',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: null,
-      workingTreeDirty: true,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 0,
+  it('debe permitir commit_sha NULL para ejecuciones manuales sin commit', () => {
+    const id = store.insertExecution({
+      commitSha: null,
+      testsTotal: 1,
       testsPassed: 0,
       testsFailed: 1,
-      testsTotal: 1,
-      coverage: null,
-      exitCode: 1,
-      failureMessage: 'Test fallo'
+      executedAt: '2024-01-01T00:00:00Z'
     });
     const row = store.db
-      .prepare('SELECT commit_id FROM tdd_execution WHERE run_id = ?')
-      .get(runId);
-    expect(row.commit_id).toBeNull();
+      .prepare('SELECT commit_sha FROM tdd_execution WHERE id = ?')
+      .get(id);
+    expect(row.commit_sha).toBeNull();
+  });
+
+  it('debe obtener una ejecucion por id', () => {
+    store.insertExecution({
+      commitSha: 'sha-c1',
+      testsTotal: 3,
+      testsPassed: 3,
+      testsFailed: 0,
+      executedAt: '2024-01-01T00:00:00Z'
+    });
+    const row = store.getExecutionById(1);
+    expect(row).toBeDefined();
+    expect(row.id).toBe(1);
   });
 
   it('debe obtener ejecuciones por commit', () => {
     store.insertExecution({
-      runId: 'run-1',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: 'sha-c1',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+      commitSha: 'sha-c1',
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
     store.insertExecution({
-      runId: 'run-2',
-      testId: 2,
-      repositoryId: repoId,
-      commitId: 'sha-c1',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:10Z',
-      endTime: '2024-01-01T00:00:15Z',
-      durationMs: 5000,
-      success: 0,
+      commitSha: 'sha-c1',
+      testsTotal: 3,
       testsPassed: 2,
       testsFailed: 1,
+      executedAt: '2024-01-01T00:00:10Z'
+    });
+    store.insertExecution({
+      commitSha: 'sha-c2',
       testsTotal: 3,
-      coverage: 80.0,
-      exitCode: 1,
-      failureMessage: null
+      testsPassed: 3,
+      testsFailed: 0,
+      executedAt: '2024-01-01T00:00:20Z'
     });
 
     const executions = store.getExecutionsByCommit('sha-c1');
     expect(executions.length).toBe(2);
-    expect(executions[0].run_id).toBe('run-1');
-    expect(executions[1].run_id).toBe('run-2');
-  });
-
-  it('debe obtener ejecuciones por rama', () => {
-    store.upsertBranch({
-      repositoryId: repoId,
-      name: 'feature-a',
-      headSha: 'sha-c1',
-      deletedAt: null
-    });
-    store.insertExecution({
-      runId: 'run-a',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: 'sha-c1',
-      branchName: 'feature-a',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
-      testsPassed: 3,
-      testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
-    });
-    store.insertExecution({
-      runId: 'run-main',
-      testId: 2,
-      repositoryId: repoId,
-      commitId: 'sha-c1',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
-      testsPassed: 3,
-      testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
-    });
-
-    const featureExecutions = store.getExecutionsByBranch('feature-a');
-    expect(featureExecutions.length).toBe(1);
-    expect(featureExecutions[0].run_id).toBe('run-a');
-
-    const mainExecutions = store.getExecutionsByBranch('main');
-    expect(mainExecutions.length).toBe(1);
-    expect(mainExecutions[0].run_id).toBe('run-main');
-  });
-
-  it('debe obtener una ejecucion por run_id', () => {
-    store.insertExecution({
-      runId: 'run-get',
-      testId: 5,
-      repositoryId: repoId,
-      commitId: 'sha-c1',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
-      testsPassed: 3,
-      testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
-    });
-    const row = store.getExecutionByRunId('run-get');
-    expect(row).toBeDefined();
-    expect(row.test_id).toBe(5);
-    expect(row.run_id).toBe('run-get');
-  });
-
-  it('debe devolver null para un run_id inexistente', () => {
-    const row = store.getExecutionByRunId('no-existe');
-    expect(row).toBeUndefined();
+    expect(executions[0].commit_sha).toBe('sha-c1');
+    expect(executions[1].commit_sha).toBe('sha-c1');
   });
 
   it('debe contar ejecuciones', () => {
     expect(store.countExecutions()).toBe(0);
     store.insertExecution({
-      runId: 'run-c1',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: 'sha-c1',
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+      commitSha: 'sha-c1',
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
     expect(store.countExecutions()).toBe(1);
   });
-});
 
-describe('tddStore - test_id secuencial y fallos', () => {
-  let store;
-  let repoId;
-
-  beforeEach(() => {
-    store = new TddStore({ dbPath: ':memory:' });
-    store.initialize();
-    repoId = store.ensureRepository({
-      rootPath: '/tmp/test-repo',
-      remoteUrl: null
-    });
-  });
-
-  afterEach(() => {
-    store.close();
-  });
-
-  it('debe devolver 0 cuando no hay ejecuciones', () => {
-    expect(store.getMaxTestId({ branchName: 'main' })).toBe(0);
-  });
-
-  it('debe devolver max(test_id) + 1 por rama', () => {
+  it('debe obtener todas las ejecuciones sin filtro (getExecutionsByBranch)', () => {
     store.insertExecution({
-      runId: 'run-a',
-      testId: 3,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+      commitSha: 'sha-c1',
+      testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
-      testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(store.getMaxTestId({ branchName: 'main' })).toBe(3);
-
     store.insertExecution({
-      runId: 'run-2',
-      testId: 5,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
-      testsPassed: 3,
-      testsFailed: 0,
+      commitSha: 'sha-c2',
       testsTotal: 3,
-      coverage: 85.0,
-      exitCode: 0,
-      failureMessage: null
-    });
-    expect(store.getMaxTestId({ branchName: 'main' })).toBe(5);
-
-    expect(store.getMaxTestId({ branchName: 'feature' })).toBe(0);
-  });
-
-  it('debe insertar fallos de prueba asociados a una ejecucion', () => {
-    store.insertExecution({
-      runId: 'run-fail',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 0,
       testsPassed: 2,
       testsFailed: 1,
-      testsTotal: 3,
-      coverage: null,
-      exitCode: 1,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:10Z'
     });
-    const failId = store.insertRunFailure({
-      runId: 'run-fail',
-      testPath: 'src/sumador.test.js',
-      title: 'debería sumar correctamente',
-      failure: 'Expected 5 to be 6'
-    });
-    expect(failId).toBeDefined();
 
-    const failures = store.db
-      .prepare('SELECT * FROM tdd_run_failures WHERE run_id = ?')
-      .all('run-fail');
-    expect(failures.length).toBe(1);
-    expect(failures[0].test_path).toBe('src/sumador.test.js');
-    expect(failures[0].failure).toBe('Expected 5 to be 6');
-  });
-
-  it('debe registrar eventos operacionales en tdd_event_log', () => {
-    const repoId2 = store.ensureRepository({
-      rootPath: '/tmp/test-repo-2',
-      remoteUrl: null
-    });
-    store.insertExecution({
-      runId: 'run-err',
-      testId: 1,
-      repositoryId: repoId2,
-      commitId: null,
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
-      testsPassed: 1,
-      testsFailed: 0,
-      testsTotal: 1,
-      coverage: 100.0,
-      exitCode: 0,
-      failureMessage: null
-    });
-    const id = store.insertEventLog({
-      level: 'error',
-      component: 'jest-runner',
-      message: 'Jest no disponible',
-      runId: 'run-err',
-      attributes: '{"code": "MODULE_NOT_FOUND"}'
-    });
-    expect(id).toBeDefined();
-
-    const row = store.db
-      .prepare('SELECT * FROM tdd_event_log WHERE id = ?')
-      .get(id);
-    expect(row.level).toBe('error');
-    expect(row.component).toBe('jest-runner');
-    expect(row.message).toBe('Jest no disponible');
-    expect(row.run_id).toBe('run-err');
+    const all = store.getExecutionsByBranch();
+    expect(all.length).toBe(2);
+    expect(all[0].id).toBeDefined();
+    expect(all[1].id).toBeDefined();
   });
 });

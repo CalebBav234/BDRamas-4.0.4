@@ -1,12 +1,8 @@
-import crypto from 'crypto';
 import fs from 'fs';
 import path from 'path';
 import { spawn } from 'cross-spawn';
 import { TddStore, nowIso } from './tddStore.js';
-import {
-  captureGitContext,
-  getCommitStats
-} from './gitContext.js';
+import { captureGitContext } from './gitContext.js';
 
 const COMMAND = 'jest';
 const args = ['--json', '--outputFile=./script/report.json'];
@@ -64,8 +60,6 @@ async function extractAndAddObject(reportFile, store) {
 
   const success = exitCode === 0;
 
-  // Read the Jest report if it exists.
-  // This preserves evidence even when tests fail.
   let report = null;
 
   try {
@@ -88,7 +82,6 @@ async function extractAndAddObject(reportFile, store) {
   const testsFailed = report ? report.numFailedTests : 0;
   const testsTotal = report ? report.numTotalTests : 0;
 
-  // Capture Git context.
   let gitContext;
 
   try {
@@ -109,144 +102,50 @@ async function extractAndAddObject(reportFile, store) {
     };
   }
 
-  const runId = crypto.randomUUID();
-
-  let testId = 0;
   let commitId = null;
-  let repositoryId = null;
+  let executionId = null;
 
   try {
-    repositoryId = store.ensureRepository({
-      rootPath: gitContext.repoRoot || process.cwd(),
-      remoteUrl: gitContext.remoteUrl
-    });
-
     if (gitContext.headSha) {
       commitId = gitContext.headSha;
-    }
 
-    // test_id secuencial por rama + commit.
-    testId =
-      store.getMaxTestId({
-        branchName: gitContext.branchName,
-        commitId
-      }) + 1;
-
-    if (commitId) {
       const parents = gitContext.parents || [];
-
-      const stats = gitContext.headSha
-        ? getCommitStats({
-            parentSha: parents[0] || null,
-            sha: gitContext.headSha
-          })
-        : {
-            additions: 0,
-            deletions: 0,
-            total: 0
-          };
+      const parentSha = parents.length > 0 ? parents[0] : null;
 
       store.upsertCommit({
-        commitId: gitContext.headSha,
-        repositoryId,
+        sha: gitContext.headSha,
+        parentSha: parentSha || null,
+        branch: gitContext.branchName || null,
         author: null,
         message: gitContext.commitMessage || null,
-        committedAt: null,
-        additions: stats.additions,
-        deletions: stats.deletions,
-        coverage: null,
-        conclusion: success ? 'success' : 'failure',
-        parents
+        committedAt: null
       });
 
-      // Registrar rama solamente cuando existe un nombre.
-      // Detached HEAD no tiene nombre de rama.
       if (gitContext.branchName) {
         store.upsertBranch({
-          repositoryId,
           name: gitContext.branchName,
-          headSha: gitContext.headSha,
-          deletedAt: null
+          forkCommitSha: gitContext.headSha
         });
       }
     }
 
-    store.insertExecution({
-      runId,
-      testId,
-      repositoryId,
-      commitId,
-      branchName: gitContext.branchName,
-      workingTreeDirty: gitContext.workingTreeDirty,
-      trigger: 'manual',
-      startTime:
-        report && Number.isFinite(report.startTime)
-          ? new Date(report.startTime).toISOString()
-          : startTime,
-      endTime:
-        report && Number.isFinite(report.endTime)
-          ? new Date(report.endTime).toISOString()
-          : endTime,
-      durationMs,
-      success,
+    executionId = store.insertExecution({
+      commitSha: commitId,
+      testsTotal,
       testsPassed,
       testsFailed,
-      testsTotal,
-      coverage: null,
-      exitCode,
-      failureMessage: jestError ? jestError.message : null
+      executedAt: endTime
     });
 
-    if (
-      report &&
-      report.numFailedTests > 0 &&
-      Array.isArray(report.testResults)
-    ) {
-      for (const suite of report.testResults) {
-        for (const failure of suite.failureMessages || []) {
-          store.insertRunFailure({
-            runId,
-            testPath: suite.testFilePath || '',
-            title: failure,
-            failure
-          });
-        }
-      }
-    }
-
-    if (jestError) {
-      store.insertEventLog({
-        level: 'error',
-        component: 'jest-runner',
-        message: jestError.message,
-        runId
-      });
-    }
-
-    const databasePath =
-      store.dbPath === ':memory:'
-        ? store.dbPath
-        : path.resolve(store.dbPath);
-    console.log(`[TDD Logging] Run saved to SQLite: runId=${runId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, database=${databasePath}`);
+    console.log(
+      `[TDD Logging] Run saved to SQLite: executionId=${executionId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, testsPassed=${testsPassed}, testsFailed=${testsFailed}, testsTotal=${testsTotal}`
+    );
   } catch (persistError) {
-    // Persistence failures must not be confused with test failures.
-    // Report to console so the user sees what happened, even if SQLite is broken.
     logError('Persistence failed — execution was NOT saved to SQLite:', persistError);
-    try {
-      store.insertEventLog({
-        level: 'error',
-        component: 'persistence',
-        message: persistError.message,
-        runId
-      });
-    } catch {
-      // Retain the Jest exit code if event logging also fails.
-    }
   }
 
   return {
-    runId,
-    testId,
+    executionId,
     commitId,
     exitCode,
     success,
@@ -266,7 +165,6 @@ async function main() {
     'report.json'
   );
 
-  // Asegurar que el directorio .tddlab existe antes de abrir la base de datos
   try {
     fs.mkdirSync(path.join(process.cwd(), DB_DIR), { recursive: true });
   } catch (mkdirError) {
@@ -312,8 +210,6 @@ async function main() {
   }
 }
 
-// Ejecutar solo cuando este archivo es el punto de entrada directo (npm test),
-// no cuando se importa como módulo desde pruebas.
 if (process.argv[1] && path.basename(process.argv[1]) === 'tddScript.js') {
   main().catch((error) => {
     console.error('Unhandled TDD runner error:');
@@ -324,5 +220,6 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'tddScript.js') {
 
 export {
   extractAndAddObject,
-  TddStore
+  TddStore,
+  main
 };

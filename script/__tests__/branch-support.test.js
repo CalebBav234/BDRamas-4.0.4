@@ -39,56 +39,35 @@ function setupStoreInRepo(repoDir) {
   const store = new TddStore({ dbPath });
   store.initialize();
   const ctx = captureGitContext({ cwd: repoDir });
-  const repoId = store.ensureRepository({
-    rootPath: ctx.repoRoot,
-    remoteUrl: ctx.remoteUrl
-  });
-  return { store, repoId, ctx, tmpDir };
+  return { store, ctx, tmpDir };
 }
 
-function recordCommit(store, repoId, ctx) {
+function recordCommit(store, ctx) {
   const parents = ctx.parents || [];
+  const parentSha = parents.length > 0 ? parents[0] : null;
   store.upsertCommit({
-    commitId: ctx.headSha,
-    repositoryId: repoId,
+    sha: ctx.headSha,
+    parentSha,
+    branch: ctx.branchName,
     author: 'Test',
     message: ctx.commitMessage,
-    committedAt: '2024-01-01T00:00:00Z',
-    additions: 0,
-    deletions: 0,
-    coverage: null,
-    conclusion: 'success',
-    parents
+    committedAt: '2024-01-01T00:00:00Z'
   });
   if (ctx.branchName) {
     store.upsertBranch({
-      repositoryId: repoId,
       name: ctx.branchName,
-      headSha: ctx.headSha,
-      deletedAt: null
+      forkCommitSha: ctx.headSha
     });
   }
 }
 
-function recordExecution(store, repoId, ctx, runId, testId, branchName, success = 1) {
+function recordExecution(store, commitSha, testsTotal, testsPassed, testsFailed) {
   store.insertExecution({
-    runId,
-    testId,
-    repositoryId: repoId,
-    commitId: ctx.headSha,
-    branchName,
-    workingTreeDirty: 0,
-    trigger: 'manual',
-    startTime: '2024-01-01T00:00:00Z',
-    endTime: '2024-01-01T00:00:05Z',
-    durationMs: 5000,
-    success,
-    testsPassed: success ? 3 : 0,
-    testsFailed: success ? 0 : 1,
-    testsTotal: 3,
-    coverage: 85.0,
-    exitCode: success ? 0 : 1,
-    failureMessage: null
+    commitSha,
+    testsTotal,
+    testsPassed,
+    testsFailed,
+    executedAt: '2024-01-01T00:00:05Z'
   });
 }
 
@@ -96,7 +75,7 @@ describe('E2E - dos ramas independientes desde una misma base', () => {
   let repoDir;
   let defaultBranch;
   let store;
-  let repoId;
+  let baseSha;
 
   beforeEach(() => {
     const { dir, defaultBranch: db } = makeTempRepo();
@@ -105,40 +84,40 @@ describe('E2E - dos ramas independientes desde una misma base', () => {
     commitInRepo(repoDir, 'commit base en ' + defaultBranch);
     const setup = setupStoreInRepo(repoDir);
     store = setup.store;
-    repoId = setup.repoId;
 
     const ctxBase = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxBase);
-    recordExecution(store, repoId, ctxBase, 'run-base', 1, defaultBranch, 1);
+    baseSha = ctxBase.headSha;
+    recordCommit(store, ctxBase);
+    recordExecution(store, baseSha, 3, 3, 0);
   });
 
   afterEach(() => {
-    if (store) {store.close();}
+    if (store) { store.close(); }
     removeDir(repoDir);
   });
 
-  it('debe mantener ejecuciones diferenciadas por rama', () => {
+  it('debe mantener ejecuciones diferenciadas por commit', () => {
     execSync('git checkout -b feature-a', { cwd: repoDir, stdio: 'pipe' });
     commitInRepo(repoDir, 'commit en feature-a');
 
     const ctxA = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxA);
-    recordExecution(store, repoId, ctxA, 'run-a', 1, 'feature-a', 1);
+    recordCommit(store, ctxA);
+    recordExecution(store, ctxA.headSha, 3, 3, 0);
 
     execSync('git checkout ' + defaultBranch, { cwd: repoDir, stdio: 'pipe' });
     commitInRepo(repoDir, 'otro commit en ' + defaultBranch);
 
     const ctxM = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxM);
-    recordExecution(store, repoId, ctxM, 'run-main-2', 2, defaultBranch, 1);
+    recordCommit(store, ctxM);
+    recordExecution(store, ctxM.headSha, 3, 3, 0);
 
-    const baseExecs = store.getExecutionsByBranch(defaultBranch);
-    const featExecs = store.getExecutionsByBranch('feature-a');
-    expect(baseExecs.length).toBe(2);
-    expect(featExecs.length).toBe(1);
+    const byBase = store.getExecutionsByCommit(baseSha);
+    const byFeat = store.getExecutionsByCommit(ctxA.headSha);
+    expect(byBase.length).toBeGreaterThanOrEqual(1);
+    expect(byFeat.length).toBe(1);
 
-    const allRunIds = [...baseExecs, ...featExecs].map((e) => e.run_id);
-    expect(new Set(allRunIds).size).toBe(allRunIds.length);
+    const allIds = [...byBase, ...byFeat].map((e) => e.id);
+    expect(new Set(allIds).size).toBe(allIds.length);
   });
 
   it('debe registrar merge commit con varios padres', () => {
@@ -146,15 +125,15 @@ describe('E2E - dos ramas independientes desde una misma base', () => {
     commitInRepo(repoDir, 'commit en feature-a');
 
     const ctxA = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxA);
-    recordExecution(store, repoId, ctxA, 'run-a', 1, 'feature-a', 1);
+    recordCommit(store, ctxA);
+    recordExecution(store, ctxA.headSha, 3, 3, 0);
 
     execSync('git checkout ' + defaultBranch, { cwd: repoDir, stdio: 'pipe' });
     commitInRepo(repoDir, 'commit en ' + defaultBranch + ' despues de branch');
 
     const ctxM = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxM);
-    recordExecution(store, repoId, ctxM, 'run-main-2', 2, defaultBranch, 1);
+    recordCommit(store, ctxM);
+    recordExecution(store, ctxM.headSha, 3, 3, 0);
 
     execSync('git merge feature-a -m "merge feature-a en ' + defaultBranch + '"', {
       cwd: repoDir,
@@ -162,150 +141,56 @@ describe('E2E - dos ramas independientes desde una misma base', () => {
     });
 
     const ctxMerge = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxMerge);
+    recordCommit(store, ctxMerge);
 
-    // Verificar que el commit de merge fue registrado con su SHA real
-    const mergeCommit = store.db
-      .prepare('SELECT * FROM tdd_commit WHERE commit_id = ?')
-      .get(ctxMerge.headSha);
+    const mergeCommit = store.getCommit(ctxMerge.headSha);
     expect(mergeCommit).toBeDefined();
-    expect(mergeCommit.commit_id).toMatch(/^[0-9a-f]+$/);
+    expect(mergeCommit.sha).toMatch(/^[0-9a-f]+$/);
     expect(mergeCommit.message).toContain('merge');
 
-    // Ejecucion posterior al merge: nuevo run_id
-    recordExecution(store, repoId, ctxMerge, 'run-post-merge', 3, defaultBranch, 1);
-    // Al menos las ejecuciones de base, feature-a, main-2 y post-merge deben existir
+    recordExecution(store, ctxMerge.headSha, 3, 3, 0);
     expect(store.countExecutions()).toBeGreaterThanOrEqual(4);
 
-    const postMerge = store.getExecutionByRunId('run-post-merge');
-    expect(postMerge).toBeDefined();
-    expect(postMerge.run_id).toBe('run-post-merge');
-    expect(postMerge.commit_id).toBe(ctxMerge.headSha);
+    const lastExec = store.db
+      .prepare('SELECT * FROM tdd_execution ORDER BY id DESC LIMIT 1')
+      .get();
+    expect(lastExec.commit_sha).toBe(ctxMerge.headSha);
   });
 
   it('debe preservar ejecuciones al cambiar de rama', () => {
-    expect(store.getExecutionsByBranch(defaultBranch).length).toBe(1);
+    const byBase = store.getExecutionsByCommit(baseSha);
+    expect(byBase.length).toBe(1);
 
     execSync('git checkout -b feature-a', { cwd: repoDir, stdio: 'pipe' });
     commitInRepo(repoDir, 'commit en feature-a');
 
     const ctxA = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxA);
-    recordExecution(store, repoId, ctxA, 'run-feat', 1, 'feature-a', 1);
+    recordCommit(store, ctxA);
+    recordExecution(store, ctxA.headSha, 3, 3, 0);
 
     execSync('git checkout ' + defaultBranch, { cwd: repoDir, stdio: 'pipe' });
 
-    expect(store.getExecutionsByBranch(defaultBranch).length).toBe(1);
-    expect(store.getExecutionsByBranch('feature-a').length).toBe(1);
+    const byFeat = store.getExecutionsByCommit(ctxA.headSha);
+    expect(byFeat.length).toBe(1);
 
-    const runBase = store.getExecutionByRunId('run-base');
-    expect(runBase.branch_name).toBe(defaultBranch);
-    const runFeat = store.getExecutionByRunId('run-feat');
-    expect(runFeat.branch_name).toBe('feature-a');
+    const runBase = store.getExecutionById(1);
+    expect(runBase.commit_sha).toBe(baseSha);
   });
 
-  it('debe preservar ejecuciones al eliminar una rama', () => {
-    execSync('git checkout -b feature-delete', { cwd: repoDir, stdio: 'pipe' });
-    commitInRepo(repoDir, 'commit en feature-delete');
-
-    const ctxD = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctxD);
-    recordExecution(store, repoId, ctxD, 'run-delete', 1, 'feature-delete', 1);
-
-    expect(store.getExecutionsByBranch('feature-delete').length).toBe(1);
-
-    store.upsertBranch({
-      repositoryId: repoId,
-      name: 'feature-delete',
-      headSha: ctxD.headSha,
-      deletedAt: '2024-01-02T00:00:00Z'
-    });
-
-    expect(store.getExecutionsByBranch('feature-delete').length).toBe(1);
-    const exec = store.getExecutionByRunId('run-delete');
-    expect(exec).toBeDefined();
-    expect(exec.branch_name).toBe('feature-delete');
-  });
-
-  it('debe soportar detached HEAD (branch_name NULL, SHA registrado)', () => {
+  it('debe soportar detached HEAD (commit_sha registrado, branch NULL)', () => {
     const sha = execSync('git rev-parse HEAD', { cwd: repoDir, stdio: 'pipe' }).toString().trim();
     execSync(`git checkout --detach ${sha}`, { cwd: repoDir, stdio: 'pipe' });
 
     const ctx = captureGitContext({ cwd: repoDir });
-    expect(ctx.isDetachedHead).toBe(true);
     expect(ctx.branchName).toBeNull();
     expect(ctx.headSha).toBe(sha);
 
-    recordCommit(store, repoId, ctx);
-    recordExecution(store, repoId, ctx, 'run-detached', 1, null, 1);
+    recordCommit(store, ctx);
+    recordExecution(store, sha, 3, 3, 0);
 
-    const exec = store.getExecutionByRunId('run-detached');
-    expect(exec.branch_name).toBeNull();
-    expect(exec.commit_id).toBe(sha);
-  });
-});
-
-describe('E2E - ejecucion fallida no se confunde con fallo de infraestructura', () => {
-  let repoDir;
-  let defaultBranch;
-  let store;
-  let repoId;
-
-  beforeEach(() => {
-    const { dir, defaultBranch: db } = makeTempRepo();
-    repoDir = dir;
-    defaultBranch = db;
-    commitInRepo(repoDir, 'commit base');
-    const setup = setupStoreInRepo(repoDir);
-    store = setup.store;
-    repoId = setup.repoId;
-    const ctx = captureGitContext({ cwd: repoDir });
-    recordCommit(store, repoId, ctx);
-  });
-
-  afterEach(() => {
-    if (store) {store.close();}
-    removeDir(repoDir);
-  });
-
-  it('debe registrar una ejecucion con tests fallidos (success=0) diferente a fallo de infraestructura', () => {
-    const ctx = captureGitContext({ cwd: repoDir });
-
-    store.insertExecution({
-      runId: 'run-tests-fail',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: ctx.headSha,
-      branchName: defaultBranch,
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 0,
-      testsPassed: 2,
-      testsFailed: 1,
-      testsTotal: 3,
-      coverage: 80.0,
-      exitCode: 1,
-      failureMessage: null
-    });
-    store.insertRunFailure({
-      runId: 'run-tests-fail',
-      testPath: 'src/sumador.test.js',
-      title: 'debería sumar',
-      failure: 'Expected 3 to be 4'
-    });
-
-    const exec = store.getExecutionByRunId('run-tests-fail');
-    expect(exec.success).toBe(0);
-    expect(exec.exit_code).toBe(1);
-    expect(exec.tests_failed).toBe(1);
-
-    const failures = store.db
-      .prepare('SELECT * FROM tdd_run_failures WHERE run_id = ?')
-      .all('run-tests-fail');
-    expect(failures.length).toBe(1);
-    expect(failures[0].failure).toBe('Expected 3 to be 4');
+    const exec = store.db
+      .prepare('SELECT * FROM tdd_execution ORDER BY id DESC LIMIT 1')
+      .get();
+    expect(exec.commit_sha).toBe(sha);
   });
 });

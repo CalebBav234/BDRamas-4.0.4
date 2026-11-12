@@ -11,7 +11,6 @@ describe('smoke tests - funcionalidad esencial', () => {
 
   it('2 - La dependencia SQLite (better-sqlite3) puede importarse', () => {
     expect(() => {
-      // TddStore ya importa better-sqlite3 internamente
       const store = new TddStore({ dbPath: ':memory:' });
       expect(store).toBeDefined();
       store.close();
@@ -34,42 +33,27 @@ describe('smoke tests - funcionalidad esencial', () => {
       .map((r) => r.name);
     expect(tables).toContain('tdd_execution');
     expect(tables).toContain('tdd_commit');
+    expect(tables).toContain('tdd_branch');
+    expect(tables).toContain('tdd_merge');
     store.close();
   });
 
   it('5 - Puede insertarse y consultarse un registro temporal', () => {
     const store = new TddStore({ dbPath: ':memory:' });
     store.initialize();
-    const repoId = store.ensureRepository({
-      rootPath: '/tmp/smoke',
-      remoteUrl: null
-    });
-    expect(repoId).toBeGreaterThan(0);
 
-    const runId = store.insertExecution({
-      runId: 'smoke-run-1',
-      testId: 1,
-      repositoryId: repoId,
-      commitId: null,
-      branchName: 'main',
-      workingTreeDirty: 0,
-      trigger: 'manual',
-      startTime: '2024-01-01T00:00:00Z',
-      endTime: '2024-01-01T00:00:05Z',
-      durationMs: 5000,
-      success: 1,
+    const id = store.insertExecution({
+      commitSha: null,
+      testsTotal: 1,
       testsPassed: 1,
       testsFailed: 0,
-      testsTotal: 1,
-      coverage: 100.0,
-      exitCode: 0,
-      failureMessage: null
+      executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(runId).toBe('smoke-run-1');
+    expect(id).toBeGreaterThan(0);
 
-    const row = store.getExecutionByRunId('smoke-run-1');
+    const row = store.getExecutionById(id);
     expect(row).toBeDefined();
-    expect(row.success).toBe(1);
+    expect(row.tests_total).toBe(1);
     store.close();
   });
 
@@ -83,7 +67,6 @@ describe('smoke tests - funcionalidad esencial', () => {
 
   it('7 - Git puede identificarse cuando se ejecuta dentro de un repositorio', () => {
     expect(isGitAvailable()).toBe(true);
-    // Este test corre dentro del repositorio del proyecto, por lo que debe ser true
     expect(isInGitRepo({ cwd: process.cwd() })).toBe(true);
     const root = getRepoRoot({ cwd: process.cwd() });
     expect(root).toBeDefined();
@@ -93,13 +76,15 @@ describe('smoke tests - funcionalidad esencial', () => {
   it('8 - El modulo principal de persistencia responde correctamente', () => {
     const store = new TddStore({ dbPath: ':memory:' });
     store.initialize();
-    expect(typeof store.ensureRepository).toBe('function');
     expect(typeof store.upsertCommit).toBe('function');
     expect(typeof store.upsertBranch).toBe('function');
     expect(typeof store.insertExecution).toBe('function');
-    expect(typeof store.getExecutionByRunId).toBe('function');
+    expect(typeof store.recordMerge).toBe('function');
+    expect(typeof store.getExecutionById).toBe('function');
     expect(typeof store.getExecutionsByCommit).toBe('function');
-    expect(typeof store.getExecutionsByBranch).toBe('function');
+    expect(typeof store.getCommit).toBe('function');
+    expect(typeof store.getBranch).toBe('function');
+    expect(typeof store.getMerges).toBe('function');
     expect(typeof store.close).toBe('function');
     store.close();
   });
@@ -111,7 +96,6 @@ describe('smoke tests - funcionalidad esencial', () => {
   });
 
   it('10 - Los smoke tests finalizan con codigo de salida 0 cuando todo pasa', () => {
-    // Si llegamos aqui, todas las comprobaciones críticas pasaron
     expect(true).toBe(true);
   });
 });
