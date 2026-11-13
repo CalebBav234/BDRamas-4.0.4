@@ -17,6 +17,7 @@ import {
   getCommitParents,
   getWorkingTreeStatus,
   getCommitStats,
+  getFirstCommitSha,
   getRemoteUrl,
   captureGitContext
 } from '../gitContext.js';
@@ -159,6 +160,14 @@ describe('gitContext - informacion de commit y rama', () => {
     expect(url).toBe('https://github.com/owner/repo');
   });
 
+  it('debe normalizar una URL SSH remota', () => {
+    execSync('git remote set-url origin git@github.com:owner/repo.git', {
+      cwd: dir,
+      stdio: 'pipe'
+    });
+    expect(getRemoteUrl({ cwd: dir })).toBe('https://github.com/owner/repo');
+  });
+
   it('debe capturar el contexto completo de Git', () => {
     const ctx = captureGitContext({ cwd: dir });
     expect(ctx.inGitRepo).toBe(true);
@@ -229,6 +238,29 @@ describe('gitContext - rutas de error', () => {
     expect(stats.deletions).toBe(0);
     expect(stats.total).toBe(0);
   });
+
+  it('devuelve valores seguros cuando faltan datos de Git', () => {
+    expect(getCurrentBranch({ cwd: nonGitDir })).toBeNull();
+    expect(getFirstCommitSha({ cwd: nonGitDir })).toBeNull();
+    expect(getRemoteUrl({ cwd: nonGitDir })).toBeNull();
+    expect(getWorkingTreeStatus({ cwd: nonGitDir })).toEqual({
+      dirty: false,
+      entries: []
+    });
+    const context = captureGitContext({ cwd: nonGitDir });
+    expect(context.inGitRepo).toBe(false);
+    expect(context.repoRoot).toBeNull();
+  });
+
+  it('devuelve ceros para un commit sin estadísticas', () => {
+    const { dir } = makeTempRepo({ withCommit: false });
+    try {
+      const stats = getCommitStats({ sha: 'HEAD', cwd: dir });
+      expect(stats).toEqual({ additions: 0, deletions: 0, total: 0 });
+    } finally {
+      removeDir(dir);
+    }
+  });
 });
 
 describe('gitContext - commit con padres (merge)', () => {
@@ -282,5 +314,85 @@ describe('gitContext - commit con padres (merge)', () => {
     } catch (e) {
       expect(fs.existsSync(dir)).toBe(true);
     }
+  });
+});
+
+describe('gitContext - cobertura de ramas y parámetros por defecto', () => {
+  let tempRepo;
+  let originalCwd;
+
+  beforeEach(() => {
+    originalCwd = process.cwd();
+    ({ dir: tempRepo } = makeTempRepo({ withCommit: false }));
+  });
+
+  afterEach(() => {
+    process.chdir(originalCwd);
+    removeDir(tempRepo);
+  });
+
+  it('usa los parámetros por defecto desde el directorio actual', () => {
+    fs.writeFileSync(path.join(tempRepo, 'file.txt'), 'linea 1\n');
+    execSync('git add .', { cwd: tempRepo, stdio: 'pipe' });
+    execSync('git commit -m "commit inicial"', { cwd: tempRepo, stdio: 'pipe' });
+    process.chdir(tempRepo);
+
+    expect(isInGitRepo()).toBe(true);
+    expect(getRepoRoot()).toBeTruthy();
+    const head = getHeadSha();
+    expect(head).toHaveLength(40);
+    expect(getCurrentBranch()).toBeTruthy();
+    expect(isDetachedHead()).toBe(false);
+    expect(getCommitMessage()).toBe('commit inicial');
+    expect(getCommitAuthor()).toBe('Test');
+    expect(getCommitDate()).toBeTruthy();
+    expect(getCommitParents()).toEqual([]);
+    expect(getWorkingTreeStatus()).toEqual({ dirty: false, entries: [] });
+    expect(getFirstCommitSha()).toBe(head);
+    expect(getRemoteUrl()).toBeNull();
+
+    const context = captureGitContext();
+    expect(context.inGitRepo).toBe(true);
+    expect(context.headSha).toBe(head);
+  });
+
+  it('maneja un repositorio sin commits al capturar el contexto', () => {
+    const context = captureGitContext({ cwd: tempRepo });
+
+    expect(context.inGitRepo).toBe(true);
+    expect(context.headSha).toBeNull();
+    expect(context.parents).toEqual([]);
+    expect(context.commitMessage).toBeNull();
+  });
+
+  it('cubre estadísticas de inserciones y eliminaciones', () => {
+    const filePath = path.join(tempRepo, 'stats.txt');
+    fs.writeFileSync(filePath, 'a\nb\nc\n');
+    execSync('git add .', { cwd: tempRepo, stdio: 'pipe' });
+    execSync('git commit -m "solo inserciones"', { cwd: tempRepo, stdio: 'pipe' });
+    const firstSha = getHeadSha({ cwd: tempRepo });
+    const firstStats = getCommitStats({ sha: firstSha, cwd: tempRepo });
+
+    expect(firstStats.additions).toBeGreaterThan(0);
+    expect(firstStats.deletions).toBe(0);
+
+    fs.writeFileSync(filePath, 'a\n');
+    execSync('git add .', { cwd: tempRepo, stdio: 'pipe' });
+    execSync('git commit -m "solo eliminaciones"', { cwd: tempRepo, stdio: 'pipe' });
+    const secondSha = getHeadSha({ cwd: tempRepo });
+    const secondStats = getCommitStats({
+      parentSha: firstSha,
+      sha: secondSha,
+      cwd: tempRepo
+    });
+
+    expect(secondStats.additions).toBe(0);
+    expect(secondStats.deletions).toBeGreaterThan(0);
+  });
+
+  it('maneja una ruta inexistente al consultar Git', () => {
+    const missingPath = path.join(tempRepo, 'no-existe');
+
+    expect(() => getHeadSha({ cwd: missingPath })).toThrow(GitContextError);
   });
 });

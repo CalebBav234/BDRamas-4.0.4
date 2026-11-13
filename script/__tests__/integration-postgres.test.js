@@ -9,6 +9,8 @@ import {
   getCommitAuthor,
   getCommitDate
 } from '../gitContext.js';
+import { makePool } from '../test-helpers/mockPool.js';
+async function queryRows(store, sql, values = []) { return (await store.db.query(sql, values)).rows; }
 
 function makeTempRepo({ withCommit = true } = {}) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'integ-'));
@@ -35,25 +37,24 @@ function removeDir(dir) {
   }
 }
 
-describe('integracion SQLite - BD basada en archivo', () => {
-  let dbPath;
+describe('integracion PostgreSQL - dos instancias con el mismo pool mock', () => {
+  let pool;
   let store1;
   let store2;
 
-  beforeEach(() => {
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'dbtest-'));
-    dbPath = path.join(tmpDir, 'tddlab.db');
-    store1 = new TddStore({ dbPath });
-    store1.initialize();
+  beforeEach(async () => {
+    pool = makePool();
+    store1 = new TddStore({ pool });
+    await store1.initialize();
   });
 
-  afterEach(() => {
-    if (store1) { store1.close(); }
-    if (store2) { store2.close(); }
+  afterEach(async () => {
+    if (store1) { await store1.close(); }
+    if (store2) { await store2.close(); }
   });
 
-  it('debe persistir datos entre dos instancias de TddStore (mismo archivo)', () => {
-    store1.upsertCommit({
+  it('debe persistir datos entre dos instancias de TddStore (mismo archivo)', async () => {
+    await store1.upsertCommit({
       sha: 'sha-persist',
       parentSha: null,
       branch: 'main',
@@ -61,53 +62,47 @@ describe('integracion SQLite - BD basada en archivo', () => {
       message: 'persist',
       committedAt: '2024-01-01T00:00:00Z'
     });
-    store1.close();
+    await store1.close();
 
-    store2 = new TddStore({ dbPath });
-    store2.initialize();
-    const row = store2.db
-      .prepare('SELECT * FROM tdd_commit WHERE sha = ?')
-      .get('sha-persist');
+    store2 = new TddStore({ pool });
+    await store2.initialize();
+    const row = (await queryRows(store2, 'SELECT * FROM tdd_commit WHERE sha = $1', ['sha-persist']))[0];
     expect(row).toBeDefined();
     expect(row.message).toBe('persist');
-    expect(store2.countCommits()).toBe(1);
+    expect(await store2.countCommits()).toBe(1);
   });
 
-  it('debe ser idempotente el esquema al reabrir la misma BD', () => {
-    store1.close();
-    store2 = new TddStore({ dbPath });
-    store2.initialize();
-    const tables = store2.db
-      .prepare('SELECT name FROM sqlite_master WHERE type=\'table\'')
-      .all()
-      .map((r) => r.name);
+  it('debe ser idempotente el esquema al reabrir la misma BD', async () => {
+    await store1.close();
+    store2 = new TddStore({ pool });
+    await store2.initialize();
+    const tables = (await queryRows(store2, 'SELECT table_name FROM information_schema.tables')).map((r) => r.table_name);
     expect(tables).toContain('tdd_execution');
     expect(tables).toContain('tdd_commit');
     expect(tables).toContain('tdd_branch');
-    store2.close();
+    await store2.close();
   });
 });
 
-describe('integracion SQLite - flujo completo con Git real', () => {
+describe('integracion PostgreSQL - flujo completo con Git real', () => {
   let repoDir;
   let defaultBranch;
-  let dbPath;
+  let pool;
   let store;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     ({ dir: repoDir, defaultBranch } = makeTempRepo({ withCommit: true }));
-    const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'integflow-'));
-    dbPath = path.join(tmpDir, 'tddlab.db');
-    store = new TddStore({ dbPath });
-    store.initialize();
+    pool = makePool();
+    store = new TddStore({ pool });
+    await store.initialize();
   });
 
-  afterEach(() => {
-    if (store) { store.close(); }
+  afterEach(async () => {
+    if (store) { await store.close(); }
     removeDir(repoDir);
   });
 
-  it('debe registrar repositorio, rama, commit y ejecucion de forma integrada', () => {
+  it('debe registrar repositorio, rama, commit y ejecucion de forma integrada', async () => {
     const ctx = captureGitContext({ cwd: repoDir });
     expect(ctx.inGitRepo).toBe(true);
     expect(ctx.headSha).toBeDefined();
@@ -125,7 +120,7 @@ describe('integracion SQLite - flujo completo con Git real', () => {
       committedAt = getCommitDate({ sha: ctx.headSha });
     } catch (e) {}
 
-    store.upsertCommit({
+    await store.upsertCommit({
       sha: ctx.headSha,
       parentSha,
       branch: ctx.branchName,
@@ -134,12 +129,12 @@ describe('integracion SQLite - flujo completo con Git real', () => {
       committedAt
     });
 
-    store.upsertBranch({
+    await store.upsertBranch({
       name: ctx.branchName,
       forkCommitSha: ctx.headSha
     });
 
-    const executionId = store.insertExecution({
+    const executionId = await store.insertExecution({
       commitSha: ctx.headSha,
       testsTotal: 3,
       testsPassed: 3,
@@ -147,18 +142,18 @@ describe('integracion SQLite - flujo completo con Git real', () => {
       executedAt: '2024-01-01T00:00:05Z'
     });
 
-    expect(store.countCommits()).toBe(1);
-    expect(store.countExecutions()).toBe(1);
-    const exec = store.getExecutionById(executionId);
+    expect(await store.countCommits()).toBe(1);
+    expect(await store.countExecutions()).toBe(1);
+    const exec = await store.getExecutionById(executionId);
     expect(exec.commit_sha).toBe(ctx.headSha);
     expect(exec.tests_total).toBe(3);
     expect(exec.success).toBeUndefined();
 
-    const byCommit = store.getExecutionsByCommit(ctx.headSha);
+    const byCommit = await store.getExecutionsByCommit(ctx.headSha);
     expect(byCommit.length).toBe(1);
   });
 
-  it('debe registrar merge commit con varios padres', () => {
+  it('debe registrar merge commit con varios padres', async () => {
     try {
       execSync('git checkout -b feature-merge', { cwd: repoDir, stdio: 'pipe' });
       fs.writeFileSync(path.join(repoDir, 'feat.txt'), 'feature');
@@ -182,7 +177,7 @@ describe('integracion SQLite - flujo completo con Git real', () => {
       const parents = ctx.parents || [];
       const parentSha = parents.length > 0 ? parents[0] : null;
       try {
-        store.upsertCommit({
+        await store.upsertCommit({
           sha: ctx.headSha,
           parentSha,
           branch: ctx.branchName,
@@ -194,10 +189,10 @@ describe('integracion SQLite - flujo completo con Git real', () => {
         // Si falla por padres faltantes, continuar igual
       }
 
-      const commit = store.getCommit(ctx.headSha);
+      const commit = await store.getCommit(ctx.headSha);
       expect(commit).toBeDefined();
 
-      store.insertExecution({
+      await store.insertExecution({
         commitSha: ctx.headSha,
         testsTotal: 2,
         testsPassed: 2,
@@ -205,14 +200,10 @@ describe('integracion SQLite - flujo completo con Git real', () => {
         executedAt: '2024-01-02T00:00:05Z'
       });
 
-      const allExecs = store.db
-        .prepare('SELECT * FROM tdd_execution')
-        .all();
+      const allExecs = await queryRows(store, 'SELECT * FROM tdd_execution');
       expect(allExecs.length).toBeGreaterThanOrEqual(1);
 
-      const lastExec = store.db
-        .prepare('SELECT * FROM tdd_execution ORDER BY id DESC LIMIT 1')
-        .get();
+      const lastExec = (await queryRows(store, 'SELECT * FROM tdd_execution ORDER BY id DESC LIMIT 1'))[0];
       expect(lastExec.commit_sha).toBe(ctx.headSha);
     } catch (e) {
       // Si algo falla por problemas de entorno, al menos verificar que el store exista

@@ -17,10 +17,20 @@ jest.mock('cross-spawn', () => ({
 }));
 
 import { spawn } from 'cross-spawn';
+jest.mock('pg', () => { const { MockPool } = require('../test-helpers/mockPool.js'); class Pool extends MockPool {} return { default: { Pool }, Pool }; });
 import { TddStore } from '../tddStore.js';
 import { extractAndAddObject } from '../tddScript.js';
+import { makePool } from '../test-helpers/mockPool.js';
 
 const mockSpawn = spawn;
+
+beforeEach(() => {
+  jest.spyOn(console, 'error').mockImplementation(() => {});
+});
+
+afterEach(() => {
+  jest.restoreAllMocks();
+});
 
 function makeTempDir() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'tdscript-'));
@@ -56,7 +66,7 @@ describe(
     let reportFile;
     let store;
 
-    beforeEach(() => {
+    beforeEach(async () => {
       tmpDir = makeTempDir();
       reportFile = path.join(tmpDir, 'script', 'report.json');
 
@@ -78,20 +88,20 @@ describe(
       );
 
       store = new TddStore({
-        dbPath: ':memory:'
+        pool: makePool()
       });
 
-      store.initialize();
+      await store.initialize();
       mockSpawnExit(0);
     });
 
-    afterEach(() => {
-      store.close();
+    afterEach(async () => {
+      await store.close();
       removeDir(tmpDir);
       jest.clearAllMocks();
     });
 
-    it('debe registrar una ejecucion exitosa en SQLite', async () => {
+    it('debe registrar una ejecucion exitosa en PostgreSQL', async () => {
       const result = await extractAndAddObject(reportFile, store);
 
       expect(result.success).toBe(true);
@@ -99,7 +109,7 @@ describe(
       expect(result.testsPassed).toBe(3);
       expect(result.executionId).toBeDefined();
 
-      const execution = store.getExecutionById(result.executionId);
+      const execution = await store.getExecutionById(result.executionId);
 
       expect(execution).toBeDefined();
       expect(execution.tests_total).toBe(3);
@@ -115,7 +125,7 @@ describe(
         fs.writeFileSync(reportFile, JSON.stringify(report));
 
         const result = await extractAndAddObject(reportFile, store);
-        const execution = store.getExecutionById(result.executionId);
+        const execution = await store.getExecutionById(result.executionId);
 
         expect(execution).toBeDefined();
         expect(Number.isNaN(Date.parse(execution.executed_at))).toBe(false);
@@ -132,7 +142,7 @@ describe(
         expect(result.success).toBe(false);
         expect(result.exitCode).toBe(1);
 
-        const execution = store.getExecutionById(result.executionId);
+        const execution = await store.getExecutionById(result.executionId);
 
         expect(execution).toBeDefined();
         expect(execution.tests_failed).toBeGreaterThanOrEqual(0);
@@ -151,7 +161,7 @@ describe(
         expect(result.success).toBe(false);
         expect(result.jestError).toBeDefined();
 
-        const execution = store.getExecutionById(result.executionId);
+        const execution = await store.getExecutionById(result.executionId);
 
         expect(execution).toBeDefined();
       }
@@ -198,7 +208,7 @@ describe(
 
           expect(result.executionId).toBeDefined();
 
-          const execution = store.getExecutionById(
+          const execution = await store.getExecutionById(
             result.executionId
           );
 
@@ -274,7 +284,7 @@ describe(
         expect(result.exitCode).toBe(1);
         expect(result.testsFailed).toBe(2);
 
-        const execution = store.getExecutionById(
+        const execution = await store.getExecutionById(
           result.executionId
         );
 
@@ -294,7 +304,7 @@ describe(
         expect(result.commitId).toBeDefined();
         expect(result.commitId).toMatch(/^[0-9a-f]+$/);
 
-        const execution = store.getExecutionById(
+        const execution = await store.getExecutionById(
           result.executionId
         );
 
@@ -330,7 +340,7 @@ describe(
         };
         try {
           const result = await extractAndAddObject(reportFile, store);
-          const execution = store.getExecutionById(result.executionId);
+          const execution = await store.getExecutionById(result.executionId);
           expect(execution.commit_sha).toBeNull();
         } finally {
           mod.captureGitContext = originalCapture;
@@ -386,7 +396,7 @@ describe(
     );
 
     it(
-      'debe ejecutar main y salir con codigo 1 cuando mkdir falla',
+      'debe ejecutar main sin depender de mkdir para PostgreSQL',
       async () => {
         const originalMkdir = fs.mkdirSync;
         fs.mkdirSync = () => {
@@ -401,7 +411,7 @@ describe(
         try {
           const mod = await import('../tddScript.js');
           await mod.main();
-          expect(process.exitCode).toBe(1);
+          expect(process.exitCode).toBe(0);
         } finally {
           fs.mkdirSync = originalMkdir;
           process.chdir(originalCwd);
@@ -459,5 +469,34 @@ describe(
         }
       }
     );
+
+    it('debe manejar un fallo inesperado del ejecutor y cerrar el store', async () => {
+      const mod = await import('../tddScript.js');
+      const fakeStore = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        close: jest.fn().mockResolvedValue(undefined)
+      };
+      process.exitCode = undefined;
+
+      await mod.main(fakeStore, jest.fn().mockRejectedValue(new Error('runner failed')));
+
+      expect(fakeStore.close).toHaveBeenCalled();
+      expect(process.exitCode).toBe(1);
+      process.exitCode = undefined;
+    });
+
+    it('debe conservar el error si falla el cierre después del ejecutor', async () => {
+      const mod = await import('../tddScript.js');
+      const fakeStore = {
+        initialize: jest.fn().mockResolvedValue(undefined),
+        close: jest.fn().mockRejectedValue(new Error('close failed'))
+      };
+      process.exitCode = undefined;
+
+      await expect(
+        mod.main(fakeStore, jest.fn().mockRejectedValue(new Error('runner failed')))
+      ).rejects.toThrow('close failed');
+      process.exitCode = undefined;
+    });
   }
 );

@@ -1,56 +1,59 @@
-import { describe, it, expect, beforeEach, afterEach } from '@jest/globals';
+import { describe, it, expect, beforeEach, afterEach, jest } from '@jest/globals';
+jest.mock('pg', () => { const { MockPool } = require('../test-helpers/mockPool.js'); class Pool extends MockPool {} return { default: { Pool }, Pool }; });
 import { TddStore } from '../tddStore.js';
 import { getLastExecutionId } from '../id_execution_tests_commit.js';
+import { makePool } from '../test-helpers/mockPool.js';
+async function queryOne(store, sql, values = []) { return (await store.db.query(sql, values)).rows[0]; }
 
-describe('getLastExecutionId sobre SQLite', () => {
+describe('getLastExecutionId sobre PostgreSQL', () => {
   let store;
 
-  beforeEach(() => {
-    store = new TddStore({ dbPath: ':memory:' });
-    store.initialize();
+  beforeEach(async () => {
+    store = new TddStore({ pool: makePool() });
+    await store.initialize();
   });
 
-  afterEach(() => {
-    store.close();
+  afterEach(async () => {
+    await store.close();
   });
 
-  it('debe devolver 1 cuando no hay ejecuciones previas', () => {
-    const next = getLastExecutionId(store);
+  it('debe devolver 1 cuando no hay ejecuciones previas', async () => {
+    const next = await getLastExecutionId(store);
     expect(next).toBe(1);
   });
 
-  it('debe devolver max(id) + 1', () => {
-    store.insertExecution({
+  it('debe devolver max(id) + 1', async () => {
+    await store.insertExecution({
       commitSha: null,
       testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
       executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(getLastExecutionId(store)).toBe(2);
+    expect(await getLastExecutionId(store)).toBe(2);
 
-    store.insertExecution({
+    await store.insertExecution({
       commitSha: null,
       testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
       executedAt: '2024-01-01T00:00:00Z'
     });
-    expect(getLastExecutionId(store)).toBe(3);
+    expect(await getLastExecutionId(store)).toBe(3);
   });
 
-  it('debe funcionar cuando se crea una instancia temporal (sin store)', () => {
-    expect(getLastExecutionId(null)).toBe(1);
+  it('debe funcionar cuando se crea una instancia temporal (sin store)', async () => {
+    expect(await getLastExecutionId(null)).toBe(1);
   });
 });
 
 describe('tddStore - integridad y unicidad', () => {
   let store;
 
-  beforeEach(() => {
-    store = new TddStore({ dbPath: ':memory:' });
-    store.initialize();
-    store.upsertCommit({
+  beforeEach(async () => {
+    store = new TddStore({ pool: makePool() });
+    await store.initialize();
+    await store.upsertCommit({
       sha: 'sha-valid',
       parentSha: null,
       branch: 'main',
@@ -60,14 +63,14 @@ describe('tddStore - integridad y unicidad', () => {
     });
   });
 
-  afterEach(() => {
-    store.close();
+  afterEach(async () => {
+    await store.close();
   });
 
-  it('debe generar ids unicos (autoincrement)', () => {
+  it('debe generar ids unicos (autoincrement)', async () => {
     const ids = new Set();
     for (let i = 0; i < 50; i++) {
-      const id = store.insertExecution({
+      const id = await store.insertExecution({
         commitSha: 'sha-valid',
         testsTotal: 3,
         testsPassed: 3,
@@ -79,8 +82,8 @@ describe('tddStore - integridad y unicidad', () => {
     expect(ids.size).toBe(50);
   });
 
-  it('debe aceptar commit_sha valido', () => {
-    const id = store.insertExecution({
+  it('debe aceptar commit_sha valido', async () => {
+    const id = await store.insertExecution({
       commitSha: 'sha-valid',
       testsTotal: 3,
       testsPassed: 3,
@@ -88,14 +91,12 @@ describe('tddStore - integridad y unicidad', () => {
       executedAt: '2024-01-01T00:00:00Z'
     });
     expect(id).toBeGreaterThan(0);
-    const row = store.db
-      .prepare('SELECT commit_sha FROM tdd_execution WHERE id = ?')
-      .get(id);
+    const row = await queryOne(store, 'SELECT * FROM tdd_execution WHERE id = $1', [id]);
     expect(row.commit_sha).toBe('sha-valid');
   });
 
-  it('debe aceptar commit_sha NULL (ejecucion manual)', () => {
-    const id = store.insertExecution({
+  it('debe aceptar commit_sha NULL (ejecucion manual)', async () => {
+    const id = await store.insertExecution({
       commitSha: null,
       testsTotal: 1,
       testsPassed: 0,
@@ -103,19 +104,19 @@ describe('tddStore - integridad y unicidad', () => {
       executedAt: '2024-01-01T00:00:00Z'
     });
     expect(id).toBeGreaterThan(0);
-    const row = store.getExecutionById(id);
+    const row = await store.getExecutionById(id);
     expect(row.commit_sha).toBeNull();
   });
 
-  it('debe consultar ejecuciones por commit y por id', () => {
-    store.insertExecution({
+  it('debe consultar ejecuciones por commit y por id', async () => {
+    await store.insertExecution({
       commitSha: 'sha-valid',
       testsTotal: 3,
       testsPassed: 3,
       testsFailed: 0,
       executedAt: '2024-01-01T00:00:00Z'
     });
-    store.insertExecution({
+    await store.insertExecution({
       commitSha: 'sha-valid',
       testsTotal: 3,
       testsPassed: 2,
@@ -123,8 +124,8 @@ describe('tddStore - integridad y unicidad', () => {
       executedAt: '2024-01-01T00:00:05Z'
     });
 
-    expect(store.getExecutionsByCommit('sha-valid').length).toBe(2);
-    expect(store.getExecutionById(1).id).toBe(1);
-    expect(store.getExecutionById(2).id).toBe(2);
+    expect((await store.getExecutionsByCommit('sha-valid')).length).toBe(2);
+    expect((await store.getExecutionById(1)).id).toBe(1);
+    expect((await store.getExecutionById(2)).id).toBe(2);
   });
 });
