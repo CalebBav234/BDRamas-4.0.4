@@ -7,9 +7,6 @@ import { captureGitContext } from './gitContext.js';
 const COMMAND = 'jest';
 const args = ['--json', '--outputFile=./script/report.json'];
 
-const DB_DIR = '.tddlab';
-const DB_FILE = 'tddlab.db';
-
 function logError(message, error) {
   console.error(`[TDD Logging] ${message}`);
   if (error) {
@@ -112,7 +109,7 @@ async function extractAndAddObject(reportFile, store) {
       const parents = gitContext.parents || [];
       const parentSha = parents.length > 0 ? parents[0] : null;
 
-      store.upsertCommit({
+      await store.upsertCommit({
         sha: gitContext.headSha,
         parentSha: parentSha || null,
         branch: gitContext.branchName || null,
@@ -122,14 +119,14 @@ async function extractAndAddObject(reportFile, store) {
       });
 
       if (gitContext.branchName) {
-        store.upsertBranch({
+        await store.upsertBranch({
           name: gitContext.branchName,
           forkCommitSha: gitContext.headSha
         });
       }
     }
 
-    executionId = store.insertExecution({
+    executionId = await store.insertExecution({
       commitSha: commitId,
       testsTotal,
       testsPassed,
@@ -138,10 +135,10 @@ async function extractAndAddObject(reportFile, store) {
     });
 
     console.log(
-      `[TDD Logging] Run saved to SQLite: executionId=${executionId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, testsPassed=${testsPassed}, testsFailed=${testsFailed}, testsTotal=${testsTotal}`
+      `[TDD Logging] Run saved to PostgreSQL: executionId=${executionId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, testsPassed=${testsPassed}, testsFailed=${testsFailed}, testsTotal=${testsTotal}`
     );
   } catch (persistError) {
-    logError('Persistence failed — execution was NOT saved to SQLite:', persistError);
+    logError('Persistence failed — execution was NOT saved to PostgreSQL:', persistError);
   }
 
   return {
@@ -158,7 +155,7 @@ async function extractAndAddObject(reportFile, store) {
   };
 }
 
-async function main() {
+async function main(store = new TddStore(), run = extractAndAddObject) {
   const reportFile = path.join(
     process.cwd(),
     'script',
@@ -166,32 +163,15 @@ async function main() {
   );
 
   try {
-    fs.mkdirSync(path.join(process.cwd(), DB_DIR), { recursive: true });
-  } catch (mkdirError) {
-    logError('No se pudo crear el directorio .tddlab:', mkdirError);
-    process.exitCode = 1;
-    return;
-  }
-
-  const store = new TddStore({
-    dbPath: path.join(
-      process.cwd(),
-      DB_DIR,
-      DB_FILE
-    )
-  });
-
-  try {
-    store.initialize();
+    await store.initialize();
   } catch (initError) {
-    logError('No se pudo inicializar la base de datos SQLite:', initError);
-    console.error('  Verifique que tiene permisos de escritura en:', process.cwd());
+    logError('No se pudo inicializar la base de datos PostgreSQL:', initError);
     process.exitCode = 1;
     return;
   }
 
   try {
-    const result = await extractAndAddObject(reportFile, store);
+    const result = await run(reportFile, store);
 
     console.log('');
     console.log('TDD execution result:');
@@ -206,7 +186,7 @@ async function main() {
 
     process.exitCode = 1;
   } finally {
-    store.close();
+    await store.close();
   }
 }
 

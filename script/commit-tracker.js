@@ -5,18 +5,10 @@ import {
   getCommitDate
 } from './gitContext.js';
 
-import path from 'path';
-
-const DB_DIR = '.tddlab';
-const DB_FILE = 'tddlab.db';
-
-function main() {
-  const store = new TddStore({
-    dbPath: path.join(process.cwd(), DB_DIR, DB_FILE)
-  });
+async function main(store = new TddStore()) {
 
   try {
-    store.initialize();
+    await store.initialize();
 
     const ctx = captureGitContext();
 
@@ -30,7 +22,7 @@ function main() {
     const author = getCommitAuthor({ sha: ctx.headSha }) || null;
     const committedAt = getCommitDate({ sha: ctx.headSha }) || null;
 
-    store.upsertCommit({
+    await store.upsertCommit({
       sha: ctx.headSha,
       parentSha: parentSha || null,
       branch: ctx.branchName || null,
@@ -40,18 +32,18 @@ function main() {
     });
 
     if (ctx.branchName) {
-      store.upsertBranch({
+      await store.upsertBranch({
         name: ctx.branchName,
         forkCommitSha: ctx.headSha
       });
     }
 
-    store.close();
+    await store.close();
     process.exit(0);
   } catch (error) {
     console.error('Error en commit-tracker.js:', error.message);
     try {
-      store.close();
+      await store.close();
     } catch (e) {
       // Ignorar
     }
@@ -61,7 +53,10 @@ function main() {
 
 if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
   try {
-    main();
+    main().catch((error) => {
+      console.error('Error en commit-tracker.js:', error.message);
+      process.exit(1);
+    });
   } catch (e) {
     // Silenciar errores durante import en tests
   }

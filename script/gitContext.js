@@ -20,7 +20,8 @@ function runGit(
       cwd,
       encoding: 'utf8',
       maxBuffer: 1024 * 1024,
-      windowsHide: true
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe']
     });
 
     return {
