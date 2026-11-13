@@ -7,12 +7,14 @@
   "scripts": {
     "start": "parcel index.html",
     "build": "parcel build index.html",
-    "test": "node ./script/tddScript.js",
-    "test:unit": "npx jest script/__tests__/database.test.js script/__tests__/persistence.test.js script/__tests__/integration-sqlite.test.js",
-    "test:integration": "npx jest script/__tests__/integration-sqlite.test.js script/__tests__/branch-support.test.js",
-    "test:e2e": "npx jest script/__tests__/branch-support.test.js",
-    "test:smoke": "npx jest script/__tests__/smoke.test.js",
-    "test:coverage": "npx jest --coverage",
+    "test": "npm run test:unit",
+    "test:unit": "node ./node_modules/jest/bin/jest.js --runInBand",
+    "test:neon": "node ./script/test-neon.js",
+    "test:app": "node ./script/tddScript.js",
+    "test:integration": "npm run test:neon",
+    "test:e2e": "npm run test:app",
+    "test:smoke": "npm run test:unit",
+    "test:coverage": "node ./node_modules/jest/bin/jest.js --coverage",
     "cypress": "cypress open",
     "cypress-run": "cypress run",
     "lint": "eslint .",
@@ -36,7 +38,9 @@
     "parcel": "^2.12.0"
   },
   "dependencies": {
-    "parcel-jest-base": "file:"
+    "dotenv": "^18.0.10",
+    "parcel-jest-base": "file:",
+    "pg": "^8.23.1"
   },
   "jest": {
     "testEnvironment": "node",
@@ -61,5 +65,9 @@
         "lines": 85
       }
     }
+  },
+  "allowScripts": {
+    "@swc/core@1.7.18": true,
+    "better-sqlite3@11.10.0": true
   }
 }
