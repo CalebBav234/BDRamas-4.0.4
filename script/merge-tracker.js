@@ -1,92 +1,138 @@
+﻿import { LocalTddStore } from './localTddStore.js';
+import { TddStore as RemoteTddStore } from './tddStore.js';
+import { captureGitContext, getCommitDate } from './gitContext.js';
 import { execFileSync } from 'child_process';
-import { TDDLogBDAdapter } from './TDDLogBDAdapter.js';
-import {
-  captureGitContext,
-  getCommitDate
-} from './gitContext.js';
 
-function getSourceBranch({ sourceCommitSha, targetBranch, cwd = process.cwd() }) {
-  const output = execFileSync(
-    'git',
-    ['branch', '--contains', sourceCommitSha, '--format=%(refname:short)'],
-    { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
-  );
-  const branches = output
-    .trim()
-    .split(/\r?\n/)
-    .map((branch) => branch.trim())
-    .filter((branch) => branch && branch !== targetBranch);
+function runGit(args, cwd = process.cwd()) {
+  try {
+    return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  } catch {
+    return null;
+  }
+}
 
+export function detectMergeInfo({ cwd = process.cwd() } = {}) {
+  const ctx = captureGitContext({ cwd });
+  const parents = ctx.parents || [];
+  const head = ctx.headSha;
+  const targetBranch = ctx.branchName || null;
+  if (!head) return null;
+
+  if (parents.length >= 2) {
+    const sourceCommitSha = parents[1];
+    let sourceBranch = null;
+    const reflog = runGit(['reflog', '-1', '--format=%gs'], cwd);
+    if (reflog) {
+      const m = reflog.match(/^merge\s+(.+?)(?::|$)/i);
+      if (m && m[1]) sourceBranch = m[1].trim().replace(/^origin\//, '');
+    }
+    if (!sourceBranch) {
+      const branchesOut = runGit(['branch', '--contains', sourceCommitSha, '--format=%(refname:short)'], cwd) || '';
+      const candidates = branchesOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      sourceBranch = candidates.find((b) => b !== targetBranch) || candidates[0] || targetBranch || 'unknown';
+    }
+    return {
+      sourceBranch,
+      targetBranch: targetBranch || 'HEAD',
+      sourceCommitSha,
+      mergeCommitSha: head,
+      isFastForward: false,
+      mergedAt: getCommitDate({ sha: head, cwd }) || undefined
+    };
+  }
+
+  const origHead = runGit(['rev-parse', '--verify', '--quiet', 'ORIG_HEAD'], cwd);
+  const reflog = runGit(['reflog', '-1', '--format=%gs'], cwd) || '';
+  const isMergeAction = /^(merge|pull)\b/i.test(reflog) || !!origHead;
+  if (isMergeAction && origHead && origHead !== head) {
+    let sourceBranch = null;
+    const m = reflog.match(/^(?:merge|pull)\s+(.+?)(?::|$)/i);
+    if (m && m[1]) sourceBranch = m[1].trim().replace(/^origin\//, '');
+    if (!sourceBranch) {
+      const branchesOut = runGit(['branch', '--contains', head, '--format=%(refname:short)'], cwd) || '';
+      const candidates = branchesOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+      sourceBranch = candidates.find((b) => b !== targetBranch) || candidates[0] || 'unknown';
+    }
+    return {
+      sourceBranch,
+      targetBranch: targetBranch || 'HEAD',
+      sourceCommitSha: head,
+      mergeCommitSha: head,
+      isFastForward: true,
+      mergedAt: getCommitDate({ sha: head, cwd }) || undefined
+    };
+  }
+
+  return null;
+}
+
+// Compatibility helper for existing tests
+export function getMergeSourceBranch({ sourceCommitSha, targetBranch, cwd = process.cwd() }) {
+  const reflog = runGit(['reflog', '-1', '--format=%gs'], cwd);
+  if (reflog) {
+    const match = reflog.match(/^merge\s+(.+?)(?::|$)/i);
+    if (match && match[1]) return match[1].trim().replace(/^origin\//, '');
+  }
+  const branchesOut = runGit(['branch', '--contains', sourceCommitSha, '--format=%(refname:short)'], cwd) || '';
+  const branches = branchesOut.split(/\r?\n/).map((b) => b.trim()).filter((b) => b && b !== targetBranch);
   return branches[0] || targetBranch;
 }
 
-function getMergeSourceBranch({ sourceCommitSha, targetBranch, cwd }) {
-  try {
-    const reflog = execFileSync(
-      'git',
-      ['reflog', '-1', '--format=%gs'],
-      { cwd, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
-    ).trim();
-    const match = reflog.match(/^merge (.+?)(?::|$)/i);
-    if (match && match[1]) {
-      return match[1].trim();
-    }
-  } catch {
-    // Fall back to the branch that contains the source commit.
-  }
+export function getSourceBranch(args) { return getMergeSourceBranch(args); }
 
-  return getSourceBranch({ sourceCommitSha, targetBranch, cwd });
+export async function recordMergeEvent(store = null, { cwd = process.cwd() } = {}) {
+  const own = !store;
+  const s = store || new LocalTddStore();
+  try {
+    await s.initialize();
+    const info = detectMergeInfo({ cwd });
+    if (!info) {
+      if (own) await s.close();
+      return { skipped: true };
+    }
+    const ctx = captureGitContext({ cwd });
+    if (ctx.headSha) {
+      await s.upsertCommit({
+        sha: ctx.headSha,
+        parentSha: (ctx.parents && ctx.parents[0]) || null,
+        branch: ctx.branchName || null,
+        author: null,
+        message: ctx.commitMessage || null,
+        committedAt: getCommitDate({ sha: ctx.headSha, cwd }) || null
+      });
+    }
+    if (info.targetBranch && info.targetBranch !== 'HEAD') {
+      await s.upsertBranch({ name: info.targetBranch, forkCommitSha: info.mergeCommitSha });
+    }
+    if (info.sourceBranch && info.sourceBranch !== 'unknown') {
+      await s.upsertBranch({ name: info.sourceBranch, forkCommitSha: info.sourceCommitSha });
+    }
+    await s.recordMerge(info);
+    if (own) await s.close();
+    return { ok: true, merge: info };
+  } catch (error) {
+    try { if (own) await s.close(); } catch {}
+    throw error;
+  }
 }
 
-async function main(store = new TDDLogBDAdapter()) {
+async function main(store = null) {
+  if (process.env.HUSKY_SKIP_TRACK === '1') process.exit(0);
   try {
-    await store.initialize();
-    const context = captureGitContext();
-    const parents = context.parents || [];
-
-    if (!context.branchName || !context.headSha) {
-      await store.close();
-      process.exit(0);
-    }
-
-    const isFastForward = parents.length < 2;
-    const sourceCommitSha = isFastForward ? context.headSha : parents[1];
-    const sourceBranch = getMergeSourceBranch({
-      sourceCommitSha,
-      targetBranch: context.branchName,
-      cwd: context.repoRoot || process.cwd()
-    });
-
-    await store.recordMerge({
-      sourceBranch,
-      targetBranch: context.branchName,
-      sourceCommitSha,
-      mergeCommitSha: context.headSha,
-      isFastForward,
-      mergedAt: getCommitDate({
-        sha: context.headSha,
-        cwd: context.repoRoot || process.cwd()
-      }) || undefined
-    });
-
-    await store.close();
+    await recordMergeEvent(store);
     process.exit(0);
   } catch (error) {
-    console.error('Error en merge-tracker.js:', error.message);
-    try {
-      await store.close();
-    } catch (closeError) {
-      console.error('Error al cerrar merge-tracker.js:', closeError.message);
-    }
+    console.error('[merge-tracker] Error registrando merge:', error.message);
     process.exit(1);
   }
 }
 
-if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
+if (process.argv[1] && process.argv[1].endsWith('merge-tracker.js')) {
   main().catch((error) => {
-    console.error('Error en merge-tracker.js:', error.message);
+    console.error('[merge-tracker] Error registrando merge:', error.message);
     process.exit(1);
   });
 }
 
-export { TDDLogBDAdapter, getMergeSourceBranch, getSourceBranch, main };
+export { RemoteTddStore as TDDLogBDAdapter, main };
+

@@ -1,1 +1,8 @@
-#npm run lint
+﻿#!/usr/bin/env sh
+. "$(dirname "$0")/_/husky.sh"
+
+if [ "$HUSKY_SKIP_TRACK" = "1" ]; then
+  exit 0
+fi
+
+node ./script/pre-commit-tracker.js
