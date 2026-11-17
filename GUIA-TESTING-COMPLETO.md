@@ -81,9 +81,10 @@ La configuración de Jest (`jest.config.js`) ejecuta únicamente tests bajo `src
 
 3. **Inspeccionar tablas y datos (sin `sqlite3` CLI, usando Node + better-sqlite3)**
    ```powershell
-   node -e "const Database=require('better-sqlite3');const db=new Database('.tddlab/tddlab.db',{readonly:true});console.log(db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\").all());db.close()"
+   node -e "const Database=require('better-sqlite3');const db=new Database('.tddlab/tddlab.db',{readonly:true});console.log(db.prepare('SELECT name FROM sqlite_master WHERE type=\'table\' ORDER BY name').all());db.close()"
    ```
    - Esperado: tablas como `tdd_branch`, `tdd_commit`, `tdd_merge`, `tdd_execution`, `tdd_schema_migration`.
+   - Nota (PowerShell): usa comillas dobles externas para `-e` y `\'` para la comilla simple dentro del SQL (PowerShell pasa `\` tal cual a Node, que lo interpreta correctamente). En bash/cmd ajusta el entrecomillado según tu shell.
 
 4. **Idempotencia**
    - Ejecuta de nuevo `npm run db:init:local`.
@@ -145,30 +146,40 @@ Los hooks escriben en la **BD local SQLite** (salvo que se omitan). Para no inte
 
 Usa un repo/ramas locales de prueba.
 
+> **Importante (PowerShell):** usa `Set-Content -Encoding utf8` para crear archivos de texto. `echo "x" > file` en PowerShell 5.1 puede generar UTF-16 y provocar conflictos binarios en merges.
+
 1. **Preparar base**
    ```powershell
    git checkout -b test/merge-base
-   echo "base" > merge-test.txt; git add merge-test.txt; git commit -m "test: base merge"
+   Set-Content -Encoding utf8 merge-test.txt "base"
+   git add merge-test.txt
+   git commit -m "test: base merge"
    ```
 
-2. **Merge no fast-forward**
+2. **Merge no fast-forward** (cambios en archivos distintos para evitar conflictos de contenido)
    ```powershell
    git checkout -b test/merge-feature
-   echo "feature" >> merge-test.txt; git add merge-test.txt; git commit -m "test: feature change"
+   Set-Content -Encoding utf8 feature.txt "feature"
+   git add feature.txt
+   git commit -m "test: feature change"
    git checkout test/merge-base
-   echo "mainline" >> merge-test.txt; git add merge-test.txt; git commit -m "test: mainline change"
+   Set-Content -Encoding utf8 mainline.txt "mainline"
+   git add mainline.txt
+   git commit -m "test: mainline change"
    git merge --no-ff test/merge-feature -m "test: merge no-ff"
    ```
    - Consulta:
      ```powershell
      node -e "const Database=require('better-sqlite3');const db=new Database('.tddlab/tddlab.db',{readonly:true});console.log(db.prepare('SELECT source_branch,target_branch,source_commit_sha,merge_commit_sha,is_fast_forward,merged_at FROM tdd_merge ORDER BY id DESC LIMIT 5').all());db.close()"
      ```
-   - Esperado: un registro con `is_fast_forward = 0` (o equivalente) y ramas/SHAs coherentes.
+   - Esperado: un registro nuevo con `is_fast_forward = 0` y ramas/SHAs coherentes (el hook `post-merge` corre solo si el merge termina sin conflictos).
 
 3. **Merge fast-forward**
    ```powershell
    git checkout -b test/ff-feature test/merge-base
-   echo "ff" > ff.txt; git add ff.txt; git commit -m "test: ff feature"
+   Set-Content -Encoding utf8 ff.txt "ff"
+   git add ff.txt
+   git commit -m "test: ff feature"
    git checkout test/merge-base
    git merge test/ff-feature
    ```
@@ -190,12 +201,10 @@ El hook `.husky/pre-push` ejecuta `script/pre-push-sync.js`, que:
 
 ### 6.1 Verificación de seguridad de configuración (sin exponer secretos)
 ```powershell
-node -e "import('./script/db-security.js').then(m=>{try{console.log(m.validateDatabaseUrl(process.env.DATABASE_URL,{requireSsl:false}))}catch(e){console.error('invalid:',e.message)}})"
+node -r dotenv/config -e "import('./script/db-security.js').then(m=>{try{console.log(JSON.stringify(m.validateDatabaseUrl(process.env.DATABASE_URL),null,2))}catch(e){console.error('invalid:',e.message)}})"
 ```
-- Requiere que `DATABASE_URL` esté cargada en el entorno (p. ej. dotenv lo carga en scripts; para esta prueba rápida puedes ejecutar desde Node con `-r dotenv/config` o usar los scripts npm). Alternativa:
-```powershell
-node -r dotenv/config -e "import('./script/db-security.js').then(m=>{try{console.log(m.validateDatabaseUrl(process.env.DATABASE_URL))}catch(e){console.error('invalid:',e.message)}})"
-```
+- `-r dotenv/config` carga `.env` en el proceso. Si `DATABASE_URL` ya está en el entorno, puedes omitir `-r dotenv/config`.
+- Para una prueba local sin exigir SSL explícito en el validador, puedes pasar `{requireSsl:false}` como segundo argumento a `validateDatabaseUrl`.
 - Esperado: objeto con `host/database/sslmode/secure/masked` sin mostrar contraseña en claro. Si es inválida o insegura según flags, muestra error.
 
 ### 6.2 Inicializar esquema remoto (si aplica)
