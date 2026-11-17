@@ -37,7 +37,7 @@ function removeDir(dir) {
   }
 }
 
-describe('integracion PostgreSQL - dos instancias con el mismo pool mock', () => {
+describe('persistencia con pool simulado - dos instancias', () => {
   let pool;
   let store1;
   let store2;
@@ -84,7 +84,7 @@ describe('integracion PostgreSQL - dos instancias con el mismo pool mock', () =>
   });
 });
 
-describe('integracion PostgreSQL - flujo completo con Git real', () => {
+describe('flujo Git con persistencia simulada', () => {
   let repoDir;
   let defaultBranch;
   let pool;

@@ -93,6 +93,30 @@ export class TddStore {
     }
   }
 
+  async withTransaction(callback) {
+    await this.initialize();
+    if (!this.pool || typeof this.pool.connect !== 'function') {
+      throw new Error('El pool no soporta transacciones');
+    }
+
+    const client = await this.pool.connect();
+    try {
+      await client.query('BEGIN');
+      const result = await callback(client);
+      await client.query('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        await client.query('ROLLBACK');
+      } catch (rollbackError) {
+        error.rollbackError = rollbackError;
+      }
+      throw error;
+    } finally {
+      client.release();
+    }
+  }
+
   async upsertBranch({ name, forkCommitSha }) {
     await this.initialize();
     await this.pool.query(

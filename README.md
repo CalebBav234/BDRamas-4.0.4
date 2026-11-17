@@ -46,16 +46,24 @@ El flujo principal está dividido en estas responsabilidades:
 - [`script/tddStore.js`](script/tddStore.js): capa de persistencia. Crea el
   esquema, abre el `Pool` de PostgreSQL y expone operaciones asíncronas para
   ramas, commits, merges y ejecuciones.
+- [`script/TDDLogBDAdapter.js`](script/TDDLogBDAdapter.js): nombre de adaptador
+  compatible que reutiliza `TddStore` sin duplicar la lógica de persistencia.
 - [`script/tddScript.js`](script/tddScript.js): ejecuta Jest, lee
   `script/report.json`, obtiene el contexto Git y guarda la ejecución en Neon.
 - [`script/commitScript.js`](script/commitScript.js): registra el commit actual
   y su rama.
 - [`script/commit-tracker.js`](script/commit-tracker.js): registra commits desde
   hooks sin volver a ejecutar Jest.
+- [`script/branch-tracker.js`](script/branch-tracker.js): registra la rama
+  activa después de un checkout.
+- [`script/merge-tracker.js`](script/merge-tracker.js): registra merges
+  fast-forward y no-fast-forward desde el hook `post-merge`.
 - [`script/gitContext.js`](script/gitContext.js): encapsula las consultas a Git
   y devuelve un contexto normalizado.
 - [`script/test-neon.js`](script/test-neon.js): verifica que
   `DATABASE_URL` sea válida y que las tablas TDD estén disponibles.
+- [`script/test-neon-integration.js`](script/test-neon-integration.js): ejecuta
+  validaciones reales contra Neon, incluyendo confirmación y rollback.
 - [`script/test-helpers/mockPool.js`](script/test-helpers/mockPool.js): pool en
   memoria utilizado por las pruebas unitarias; no conecta con Neon.
 
@@ -90,6 +98,11 @@ Cada ejecución se inserta como un registro nuevo.
 6. Guarda los totales de pruebas y el código de salida en `tdd_execution`.
 7. Cierra el pool de PostgreSQL.
 
+Los hooks `post-checkout`, `post-commit` y `post-merge` registran,
+respectivamente, la rama activa, el commit y los merges. Para
+evitar que un fallo de seguimiento bloquee una operación de Git durante una
+ejecución controlada, puede usarse `HUSKY_SKIP_TRACK=1`.
+
 Si la ejecución se realiza fuera de un repositorio Git, se guarda igualmente la
 ejecución, pero `commit_sha` queda en `NULL`. Un fallo de Jest se registra como
 resultado de pruebas fallidas; un fallo de persistencia se informa mediante
@@ -103,6 +116,7 @@ resultado de pruebas fallidas; un fallo de persistencia se informa mediante
 | `npm test` | Ejecuta las pruebas unitarias sin escribir en Neon. |
 | `npm run test:unit` | Alias explícito de las pruebas unitarias. |
 | `npm run test:neon` | Comprueba la conexión y las tablas de Neon. |
+| `npm run test:neon:integration` | Ejecuta integración real contra Neon solo con `RUN_NEON_INTEGRATION=1`. |
 | `npm run test:app` | Ejecuta Jest y guarda una ejecución real en Neon. |
 | `npm run test:integration` | Ejecuta la comprobación real de Neon. |
 | `npm run test:e2e` | Ejecuta el flujo real de la aplicación. |
@@ -121,6 +135,11 @@ resultado de pruebas fallidas; un fallo de persistencia se informa mediante
 Las pruebas unitarias no deben depender de la red ni insertar datos reales. Usa
 `makePool()` de `script/test-helpers/mockPool.js` en nuevas pruebas de
 persistencia. Reserva `test:app` para comprobaciones manuales o de integración.
+
+La integración real está separada de Jest y permanece desactivada por defecto.
+Para ejecutarla de forma explícita, configura `DATABASE_URL` y
+`RUN_NEON_INTEGRATION=1`; el script crea registros temporales y los elimina al
+finalizar.
 
 ## Consultar datos en Neon
 

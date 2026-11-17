@@ -14,6 +14,7 @@ export class MockPool {
 
   async query(sql, values = []) {
     const text = sql.replace(/\s+/g, ' ').trim();
+    if (/^(BEGIN|COMMIT|ROLLBACK)$/i.test(text)) {return { rows: [] };}
     if (/^CREATE TABLE|^CREATE INDEX/i.test(text)) {return { rows: [] };}
     if (/INSERT INTO tdd_schema_migration/i.test(text)) {
       if (!this.tables.tdd_schema_migration.some((r) => r.version === values[0])) {
@@ -90,6 +91,30 @@ export class MockPool {
 
   async end() {
     this.closed = true;
+  }
+
+  async connect() {
+    const snapshot = JSON.parse(JSON.stringify(this.tables));
+    let active = true;
+    return {
+      query: async (sql, values = []) => {
+        const text = sql.replace(/\s+/g, ' ').trim();
+        if (/^ROLLBACK$/i.test(text)) {
+          this.tables = JSON.parse(JSON.stringify(snapshot));
+          active = false;
+          return { rows: [] };
+        }
+        if (/^COMMIT$/i.test(text)) {
+          active = false;
+          return { rows: [] };
+        }
+        if (!active) {
+          throw new Error('Transaction is no longer active');
+        }
+        return this.query(sql, values);
+      },
+      release: () => {}
+    };
   }
 }
 
