@@ -24,31 +24,22 @@ export function readPrePushRefsFromStdin(stdinText = '') {
 
 function isZeroSha(sha) { return /^0+$/.test(sha || ''); }
 
-export function getCommitsInRange(rangeSpec, cwd = process.cwd()) {
+export function getCommitsInRange(rangeSpec, cwd = process.cwd(), extraArgs = []) {
   if (!rangeSpec) return [];
-  const out = runGit(['rev-list', '--reverse', rangeSpec], cwd);
+  const out = runGit(['rev-list', '--reverse', rangeSpec, ...extraArgs], cwd);
   if (!out) return [];
   return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 }
 
-export function computePushCommitShas(refUpdates, cwd = process.cwd()) {
+export function computePushCommitShas(refUpdates, cwd = process.cwd(), remoteName = 'origin') {
   const shas = new Set();
   for (const ref of refUpdates) {
     const { localSha, remoteSha } = ref;
     if (isZeroSha(localSha)) continue; // delete
-    let range = null;
-    if (isZeroSha(remoteSha)) {
-      const remoteRef = ref.remoteRef;
-      const remoteExists = runGit(['rev-parse', '--verify', '--quiet', remoteRef], cwd);
-      if (remoteExists) {
-        range = `${remoteRef}..${localSha}`;
-      } else {
-        range = localSha; // new branch with unknown base; best-effort include reachable
-      }
-    } else {
-      range = `${remoteSha}..${localSha}`;
-    }
-    const listed = getCommitsInRange(range, cwd);
+    const newBranch = isZeroSha(remoteSha);
+    const range = newBranch ? localSha : `${remoteSha}..${localSha}`;
+    const excludePublished = newBranch ? ['--not', `--remotes=${remoteName}`] : [];
+    const listed = getCommitsInRange(range, cwd, excludePublished);
     if (listed.length) listed.forEach((s) => shas.add(s));
     else if (!isZeroSha(localSha)) shas.add(localSha); // fast-forward/direct
   }
