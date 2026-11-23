@@ -2,4 +2,4 @@ if [ "$HUSKY_SKIP_TRACK" = "1" ] || [ "$SKIP_DB_SYNC" = "1" ]; then
   exit 0
 fi
 
-node ./script/pre-push-sync.js
+node ./script/pre-push-sync.js "$1"
