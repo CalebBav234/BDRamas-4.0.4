@@ -69,4 +69,15 @@ test('Git conserva el push pendiente y envía el mismo registro al reintentar', 
   assert.equal(merges[0].sourceBranch, 'suma');
   assert.equal(merges[0].targetBranch, 'main');
   assert.equal(merges[0].mergeCommitSha, head);
+
+  await git('switch', '-c', 'resta');
+  await git('commit', '--allow-empty', '-m', 'feat: resta');
+  const tip = await git('rev-parse', 'HEAD');
+  await git('switch', 'main');
+  await git('merge', '--ff-only', 'resta');
+  await git('push', 'origin', 'main');
+  const ff = received.at(-1);
+  assert.deepEqual(ff.commits.map(c => [c.commitSha, c.branch]), [[tip, 'resta']]);
+  assert.equal(ff.merges[0].sourceCommitSha, tip);
+  assert.equal(ff.merges[0].isFastForward, true);
 });

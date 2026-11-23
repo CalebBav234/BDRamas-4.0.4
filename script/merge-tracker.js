@@ -91,11 +91,12 @@ export async function recordMergeEvent(store = null, { cwd = process.cwd() } = {
       return { skipped: true };
     }
     const ctx = captureGitContext({ cwd });
-    if (ctx.headSha) {
+    const existingTip = info.isFastForward && ctx.headSha && await s.getCommit(ctx.headSha);
+    if (ctx.headSha && !existingTip) {
       await s.upsertCommit({
         sha: ctx.headSha,
         parentSha: (ctx.parents && ctx.parents[0]) || null,
-        branch: ctx.branchName || null,
+        branch: info.isFastForward ? info.sourceBranch : ctx.branchName || null,
         author: null,
         message: ctx.commitMessage || null,
         committedAt: getCommitDate({ sha: ctx.headSha, cwd }) || null
