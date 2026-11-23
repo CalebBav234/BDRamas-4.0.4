@@ -2,6 +2,8 @@ import fs from 'fs';
 import path from 'path';
 import { spawn } from 'cross-spawn';
 import { TddStore, nowIso } from './tddStore.js';
+import LocalTddStore from './localTddStore.js';
+import { useBranchApi } from './branch-api.js';
 import { captureGitContext } from './gitContext.js';
 
 const COMMAND = 'jest';
@@ -135,10 +137,10 @@ async function extractAndAddObject(reportFile, store) {
     });
 
     console.log(
-      `[TDD Logging] Run saved to PostgreSQL: executionId=${executionId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, testsPassed=${testsPassed}, testsFailed=${testsFailed}, testsTotal=${testsTotal}`
+      `[TDD Logging] Ejecución guardada: executionId=${executionId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, testsPassed=${testsPassed}, testsFailed=${testsFailed}, testsTotal=${testsTotal}`
     );
   } catch (persistError) {
-    logError('Persistence failed — execution was NOT saved to PostgreSQL:', persistError);
+    logError('No se pudo guardar la ejecución:', persistError);
   }
 
   return {
@@ -155,7 +157,7 @@ async function extractAndAddObject(reportFile, store) {
   };
 }
 
-async function main(store = new TddStore(), run = extractAndAddObject) {
+async function main(store = useBranchApi() ? new LocalTddStore() : new TddStore(), run = extractAndAddObject) {
   const reportFile = path.join(
     process.cwd(),
     'script',
@@ -165,7 +167,7 @@ async function main(store = new TddStore(), run = extractAndAddObject) {
   try {
     await store.initialize();
   } catch (initError) {
-    logError('No se pudo inicializar la base de datos PostgreSQL:', initError);
+    logError('No se pudo inicializar la base de datos:', initError);
     process.exitCode = 1;
     return;
   }
