@@ -6,6 +6,8 @@ import path from 'node:path';
 import test from 'node:test';
 import { computePushCommitShas } from '../sync-to-remote.js';
 
+import { branchForApi, repositoryFromRemote } from '../branch-push-payload.js';
+
 const zeroSha = '0'.repeat(40);
 
 function createRepo(t) {
@@ -31,4 +33,23 @@ test('el primer push incluye los dos commits nuevos de la rama', t => {
   const last = commit('restar');
   const ref = { remoteRef: 'refs/heads/suma', localSha: last, remoteSha: zeroSha };
   assert.deepEqual(computePushCommitShas([ref], cwd), [first, last]);
+});
+
+test('identifica el mismo repositorio por SSH y por HTTPS sin incluir credenciales', () => {
+  const expected = { slug: 'equipo/base', remoteUrl: 'https://github.com/equipo/base' };
+  assert.deepEqual(repositoryFromRemote('git@github.com:equipo/base.git'), expected);
+  assert.deepEqual(repositoryFromRemote('https://usuario@github.com/equipo/base.git'), expected);
+});
+
+test('conserva el punto de creación de la rama aunque SQLite tenga el último commit', t => {
+  const { cwd, git, commit } = createRepo(t);
+  const fork = commit('inicio');
+  git('switch', '--quiet', '-c', 'suma');
+  const tip = commit('otro cambio');
+  const branch = branchForApi('equipo/base', { name: 'suma', fork_commit_sha: tip }, null, cwd);
+  assert.equal(branch.forkCommitSha, fork);
+  assert.ok(Number.isFinite(Date.parse(branch.createdAt)));
+  const deleted = branchForApi('equipo/base', { name: 'borrada', created_at: '2026-10-01 11:00:00' }, null, cwd);
+  assert.equal(deleted.createdAt, '2026-10-01T11:00:00.000Z');
+  assert.equal(deleted.forkCommitSha, undefined);
 });

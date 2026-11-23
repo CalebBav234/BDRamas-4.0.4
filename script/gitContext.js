@@ -309,10 +309,10 @@ export function getFirstCommitSha({
 }
 
 export function getRemoteUrl({
-  cwd = process.cwd()
+  cwd = process.cwd(), remote = 'origin'
 } = {}) {
   const result = runGit(
-    ['config', '--get', 'remote.origin.url'],
+    ['config', '--get', `remote.${remote}.url`],
     {
       cwd,
       throwOnError: false
