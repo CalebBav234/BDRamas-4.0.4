@@ -6,6 +6,8 @@ import path from 'node:path';
 import { createServer } from 'node:http';
 import { postBranchActivity, useBranchApi } from '../branch-api.js';
 import test from 'node:test';
+import LocalTddStore from '../localTddStore.js';
+import { collectBranchPush } from '../collect-branch-push.js';
 import { computePushCommitShas } from '../sync-to-remote.js';
 
 import { branchForApi, commitsForApi, mergesForApi, repositoryFromRemote } from '../branch-push-payload.js';
@@ -118,4 +120,26 @@ test('envía un único POST y exige confirmación del servidor', async t => {
   status = 200;
   reply = {};
   await assert.rejects(postBranchActivity(payload, endpoint), /no confirma/);
+});
+
+test('arma el cuerpo con Git y SQLite al subir una rama distinta a la activa', async t => {
+  const { cwd, git, commit } = createRepo(t);
+  git('remote', 'add', 'equipo', 'https://github.com/equipo/base.git');
+  const base = commit('base');
+  git('switch', '--quiet', '-c', 'division');
+  const sha = commit('dividir');
+  git('switch', '--quiet', 'main');
+  const store = new LocalTddStore({ dbPath: path.join(cwd, 'tdd.db') });
+  t.after(() => store.close());
+  await store.insertExecution({ commitSha: sha, testsTotal: 3, testsPassed: 3, testsFailed: 0 });
+  const ref = `refs/heads/division ${sha} refs/heads/division ${base}`;
+  const body = await collectBranchPush(store, ref, 'equipo', cwd);
+  assert.equal(body.repository.slug, 'equipo/base');
+  assert.deepEqual(body.branches.map(b => b.name), ['division']);
+  assert.equal(body.commits.length, 1);
+  assert.equal(body.commits[0].branch, 'division');
+  assert.equal(body.commits[0].tddExecutions[0].testsPassed, 3);
+  assert.deepEqual(body.merges, []);
+  assert.equal(await collectBranchPush(store, '', 'equipo', cwd), null);
+  assert.equal(await collectBranchPush(store, `(delete) ${zeroSha} refs/heads/division ${sha}`, 'equipo', cwd), null);
 });
