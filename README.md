@@ -1,23 +1,37 @@
 # BDRamas
 
 Aplicación de demostración para ejecutar pruebas TDD y registrar su relación con
-ramas, commits y merges de Git. La persistencia se realiza en PostgreSQL
-administrado por Neon mediante el cliente `pg`.
+ramas, commits y merges de Git. Los hooks registran la actividad en SQLite.
+El pre-push puede enviarla a la API de ramas o sincronizarla con PostgreSQL en Neon.
 
 ## Inicio rápido
 
 ### Requisitos
 
-- Node.js y npm.
+- Node.js 20 y npm.
 - Git disponible en el `PATH`.
-- Una base de datos PostgreSQL accesible. En el entorno recomendado, se utiliza
-  un proyecto de [Neon](https://neon.tech/).
+- La API de ramas en ejecución para usar el envío por HTTP, o una conexión a Neon para el modo PostgreSQL.
 
 ### Instalación
 
 ```powershell
 npm install
 ```
+
+### Envío a la API de ramas
+
+En `.env` configura la dirección del backend:
+
+```env
+TDD_BRANCHES_URL=http://localhost:3000/api/TDDCycles/branches/branches
+```
+
+1. Haz el commit que quieres probar.
+2. Ejecuta `npm run test:app` para guardar en SQLite el resultado asociado al SHA actual.
+3. Ejecuta `git push`. El hook envía un solo JSON con el repositorio, las ramas, los commits con sus ejecuciones y los merges. Al confirmar la API, muestra los cuatro contadores.
+4. Si la API está apagada o responde con un error, vuelve a levantarla y repite el push. Los datos se conservan en SQLite.
+
+Sin variables de conexión se usa la URL local de arriba. Si solo defines `DATABASE_URL`, se usa la conexión directa a Neon. `npm run test:branches` prueba el envío con un servidor HTTP temporal y un remoto Git de prueba.
 
 ### Configuración de Neon
 
@@ -49,7 +63,7 @@ El flujo principal está dividido en estas responsabilidades:
 - [`script/TDDLogBDAdapter.js`](script/TDDLogBDAdapter.js): nombre de adaptador
   compatible que reutiliza `TddStore` sin duplicar la lógica de persistencia.
 - [`script/tddScript.js`](script/tddScript.js): ejecuta Jest, lee
-  `script/report.json`, obtiene el contexto Git y guarda la ejecución en Neon.
+  `script/report.json`, obtiene el contexto Git y guarda la ejecución en el almacén configurado.
 - [`script/commitScript.js`](script/commitScript.js): registra el commit actual
   y su rama.
 - [`script/commit-tracker.js`](script/commit-tracker.js): registra commits desde
@@ -90,13 +104,13 @@ Cada ejecución se inserta como un registro nuevo.
 
 `npm run test:app` realiza este flujo:
 
-1. Carga `DATABASE_URL` desde `.env`.
-2. Inicializa el esquema de Neon.
+1. Carga la configuración desde `.env`.
+2. Inicializa SQLite en modo API o PostgreSQL en modo Neon.
 3. Ejecuta Jest con salida JSON en `script/report.json`.
 4. Obtiene rama, commit, padres y estado del árbol mediante Git.
 5. Guarda el commit y la rama, si existen.
 6. Guarda los totales de pruebas y el código de salida en `tdd_execution`.
-7. Cierra el pool de PostgreSQL.
+7. Cierra la conexión.
 
 Los hooks `post-checkout`, `post-commit` y `post-merge` registran,
 respectivamente, la rama activa, el commit y los merges. Para
@@ -117,7 +131,7 @@ resultado de pruebas fallidas; un fallo de persistencia se informa mediante
 | `npm run test:unit` | Alias explícito de las pruebas unitarias. |
 | `npm run test:neon` | Comprueba la conexión y las tablas de Neon. |
 | `npm run test:neon:integration` | Ejecuta integración real contra Neon solo con `RUN_NEON_INTEGRATION=1`. |
-| `npm run test:app` | Ejecuta Jest y guarda una ejecución real en Neon. |
+| `npm run test:app` | Ejecuta Jest y guarda el resultado en SQLite o en Neon según la configuración. |
 | `npm run test:integration` | Ejecuta la comprobación real de Neon. |
 | `npm run test:e2e` | Ejecuta el flujo real de la aplicación. |
 | `npm run test:smoke` | Ejecuta la suite rápida de smoke tests. |
@@ -129,7 +143,7 @@ resultado de pruebas fallidas; un fallo de persistencia se informa mediante
 
 - Para desarrollar o modificar código: `npm test`.
 - Para confirmar credenciales y disponibilidad de Neon: `npm run test:neon`.
-- Para crear deliberadamente un registro real en Neon: `npm run test:app`.
+- Para registrar una ejecución asociada al commit actual: `npm run test:app`.
 - Para validar cobertura antes de entregar cambios: `npm run test:coverage`.
 
 Las pruebas unitarias no deben depender de la red ni insertar datos reales. Usa
@@ -241,7 +255,7 @@ makePool() })`.
 ### No aparecen datos nuevos
 
 `npm test` no escribe en la nube. Ejecuta `npm run test:app` y luego consulta
-`tdd_execution` en el SQL Editor de Neon.
+`tdd_execution` en SQLite o, en modo PostgreSQL, en el SQL Editor de Neon.
 
 ### Mensajes `fatal:` de Git
 
@@ -267,4 +281,4 @@ npm run test:neon
 ```
 
 No ejecutes `npm run test:app` automáticamente en CI o durante una prueba
-unitaria: ese comando escribe datos reales en Neon.
+unitaria: ese comando escribe datos en el almacén configurado.

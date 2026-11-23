@@ -179,7 +179,13 @@ Usa un repo/ramas locales de prueba.
 
 ---
 
-## 6. Verificar sincronización pre-push (SQLite → PostgreSQL/Neon)
+## 6. Verificar la sincronización pre-push
+
+En modo API, `npm run test:branches` comprueba el cuerpo enviado, los merges y el reintento cuando el servidor devuelve un error. Para probar con tu backend, configura `TDD_BRANCHES_URL`, haz un commit, ejecuta `npm run test:app` y sube la rama. El hook imprime los contadores que devuelve la API.
+
+### Sincronización directa con PostgreSQL/Neon
+
+Los pasos siguientes corresponden a una configuración con solo `DATABASE_URL`.
 
 El hook `.husky/pre-push` ejecuta `script/pre-push-sync.js`, que:
 - lee refs desde stdin del push,
