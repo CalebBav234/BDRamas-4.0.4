@@ -3,6 +3,8 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
+import { createServer } from 'node:http';
+import { postBranchActivity, useBranchApi } from '../branch-api.js';
 import test from 'node:test';
 import { computePushCommitShas } from '../sync-to-remote.js';
 
@@ -82,4 +84,38 @@ test('incluye los merges del rango con su indicador de fast-forward', () => {
   assert.deepEqual(merges[0], { repositorySlug: 'equipo/base', sourceBranch: 'suma', targetBranch: 'main',
     sourceCommitSha: 'a', mergeCommitSha: 'b', isFastForward: false, mergedAt: '2026-11-01T12:00:00.000Z' });
   assert.equal(merges[1].isFastForward, true);
+});
+
+test('usa la API local por defecto y respeta una configuración existente de Neon', () => {
+  assert.equal(useBranchApi({}), true);
+  assert.equal(useBranchApi({ DATABASE_URL: 'postgresql://servidor/db' }), false);
+  assert.equal(useBranchApi({ DATABASE_URL: 'postgresql://servidor/db', TDD_BRANCHES_URL: 'http://localhost:3000/api' }), true);
+});
+
+test('envía un único POST y exige confirmación del servidor', async t => {
+  const payload = { repository: { slug: 'equipo/base' }, branches: [], commits: [], merges: [] };
+  const saved = { repository: payload.repository, branchesSaved: 0, commitsSaved: 0, mergesSaved: 0, executionsSaved: 0 };
+  let status = 201;
+  let reply = saved;
+  const requests = [];
+  const server = createServer(async (req, res) => {
+    let body = '';
+    for await (const chunk of req) {
+      body += chunk;
+    }
+    requests.push([req.method, req.url, req.headers['content-type'], JSON.parse(body)]);
+    res.writeHead(status, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify(reply));
+  });
+  await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
+  t.after(() => new Promise(resolve => server.close(resolve)));
+  const route = '/api/TDDCycles/branches/branches';
+  const endpoint = `http://127.0.0.1:${server.address().port}${route}`;
+  assert.deepEqual(await postBranchActivity(payload, endpoint), saved);
+  assert.deepEqual(requests, [['POST', route, 'application/json', payload]]);
+  status = 503;
+  await assert.rejects(postBranchActivity(payload, endpoint), /503/);
+  status = 200;
+  reply = {};
+  await assert.rejects(postBranchActivity(payload, endpoint), /no confirma/);
 });
