@@ -28,7 +28,7 @@ export async function collectCommitPush(localStore, revision, cwd = process.cwd(
     throw new Error('Indica el SHA del commit, por ejemplo: npm run db:sync -- --commit 0557321');
   }
   const branch = getCurrentBranch({ cwd });
-  if (!branch) throw new Error('Selecciona la rama que contiene el commit.');
+  if (!branch) {throw new Error('Selecciona la rama que contiene el commit.');}
   let sha;
   try {
     const options = { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
@@ -56,7 +56,7 @@ async function buildBranchPush(localStore, remote, cwd, updates, branchesBySha) 
     const shas = [...sources.keys()];
     rows.commits.push(...await localStore.getCommitsByShas(shas));
     rows.executions.push(...await localStore.getExecutionsByCommitShas(shas));
-    for (const [sha, branch] of sources) branchesBySha.set(sha, branch);
+    for (const [sha, branch] of sources) {branchesBySha.set(sha, branch);}
   }
   const commits = commitsForApi(repository.slug, rows, branchesBySha, cwd);
   const observed = new Map();

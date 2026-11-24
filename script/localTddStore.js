@@ -1,5 +1,3 @@
-﻿import fs from 'fs';
-import path from 'path';
 import { openLocalDatabase, resolveLocalDbPath } from './db-security.js';
 
 const SCHEMA_VERSION = 1;
@@ -57,7 +55,7 @@ export class LocalTddStore {
   }
 
   async initialize() {
-    if (this._initialized && this.db) return this.db;
+    if (this._initialized && this.db) {return this.db;}
     if (!this.db) {
       const opened = openLocalDatabase(this.dbPath);
       this.db = opened.db;
@@ -113,7 +111,7 @@ export class LocalTddStore {
     const exists = this.db.prepare(
       `SELECT id FROM tdd_merge WHERE merge_commit_sha=? AND source_branch=? AND target_branch=?`
     ).get(mergeCommitSha, sourceBranch, targetBranch);
-    if (exists) return exists.id;
+    if (exists) {return exists.id;}
     const info = this.db.prepare(
       `INSERT INTO tdd_merge (source_branch, target_branch, source_commit_sha, merge_commit_sha, is_fast_forward, merged_at)
        VALUES (?, ?, ?, ?, ?, ?)`
@@ -199,7 +197,7 @@ export class LocalTddStore {
 
   async getMergesByCommitShas(shas = []) {
     await this.initialize();
-    if (!shas.length) return [];
+    if (!shas.length) {return [];}
     const placeholders = shas.map(() => '?').join(',');
     return this.db.prepare(
       `SELECT * FROM tdd_merge WHERE merge_commit_sha IN (${placeholders}) OR source_commit_sha IN (${placeholders})`
@@ -208,7 +206,7 @@ export class LocalTddStore {
 
   async getExecutionsByCommitShas(shas = []) {
     await this.initialize();
-    if (!shas.length) return [];
+    if (!shas.length) {return [];}
     const placeholders = shas.map(() => '?').join(',');
     return this.db.prepare(
       `SELECT * FROM tdd_execution WHERE commit_sha IN (${placeholders})`
@@ -217,7 +215,7 @@ export class LocalTddStore {
 
   async getCommitsByShas(shas = []) {
     await this.initialize();
-    if (!shas.length) return [];
+    if (!shas.length) {return [];}
     const placeholders = shas.map(() => '?').join(',');
     return this.db.prepare(`SELECT * FROM tdd_commit WHERE sha IN (${placeholders})`).all(...shas);
   }

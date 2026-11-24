@@ -16,7 +16,7 @@ export function detectMergeInfo({ cwd = process.cwd() } = {}) {
   const parents = ctx.parents || [];
   const head = ctx.headSha;
   const targetBranch = ctx.branchName || null;
-  if (!head) return null;
+  if (!head) {return null;}
 
   if (parents.length >= 2) {
     const sourceCommitSha = parents[1];
@@ -24,7 +24,7 @@ export function detectMergeInfo({ cwd = process.cwd() } = {}) {
     const reflog = runGit(['reflog', '-1', '--format=%gs'], cwd);
     if (reflog) {
       const m = reflog.match(/^merge\s+(.+?)(?::|$)/i);
-      if (m && m[1]) sourceBranch = m[1].trim().replace(/^origin\//, '');
+      if (m && m[1]) {sourceBranch = m[1].trim().replace(/^origin\//, '');}
     }
     if (!sourceBranch) {
       const branchesOut = runGit(['branch', '--contains', sourceCommitSha, '--format=%(refname:short)'], cwd) || '';
@@ -47,7 +47,7 @@ export function detectMergeInfo({ cwd = process.cwd() } = {}) {
   if (isMergeAction && origHead && origHead !== head) {
     let sourceBranch = null;
     const m = reflog.match(/^(?:merge|pull)\s+(.+?)(?::|$)/i);
-    if (m && m[1]) sourceBranch = m[1].trim().replace(/^origin\//, '');
+    if (m && m[1]) {sourceBranch = m[1].trim().replace(/^origin\//, '');}
     if (!sourceBranch) {
       const branchesOut = runGit(['branch', '--contains', head, '--format=%(refname:short)'], cwd) || '';
       const candidates = branchesOut.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
@@ -71,7 +71,7 @@ export function getMergeSourceBranch({ sourceCommitSha, targetBranch, cwd = proc
   const reflog = runGit(['reflog', '-1', '--format=%gs'], cwd);
   if (reflog) {
     const match = reflog.match(/^merge\s+(.+?)(?::|$)/i);
-    if (match && match[1]) return match[1].trim().replace(/^origin\//, '');
+    if (match && match[1]) {return match[1].trim().replace(/^origin\//, '');}
   }
   const branchesOut = runGit(['branch', '--contains', sourceCommitSha, '--format=%(refname:short)'], cwd) || '';
   const branches = branchesOut.split(/\r?\n/).map((b) => b.trim()).filter((b) => b && b !== targetBranch);
@@ -87,7 +87,7 @@ export async function recordMergeEvent(store = null, { cwd = process.cwd() } = {
     await s.initialize();
     const info = detectMergeInfo({ cwd });
     if (!info) {
-      if (own) await s.close();
+      if (own) {await s.close();}
       return { skipped: true };
     }
     const ctx = captureGitContext({ cwd });
@@ -109,16 +109,16 @@ export async function recordMergeEvent(store = null, { cwd = process.cwd() } = {
       await s.upsertBranch({ name: info.sourceBranch, forkCommitSha: info.sourceCommitSha });
     }
     await s.recordMerge(info);
-    if (own) await s.close();
+    if (own) {await s.close();}
     return { ok: true, merge: info };
   } catch (error) {
-    try { if (own) await s.close(); } catch {}
+    try { if (own) {await s.close();} } catch {}
     throw error;
   }
 }
 
 async function main(store = null) {
-  if (process.env.HUSKY_SKIP_TRACK === '1') process.exit(0);
+  if (process.env.HUSKY_SKIP_TRACK === '1') {process.exit(0);}
   try {
     await recordMergeEvent(store);
     process.exit(0);

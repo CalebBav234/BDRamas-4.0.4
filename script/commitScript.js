@@ -9,7 +9,7 @@ async function main(store = null) {
     await s.initialize();
     const ctx = captureGitContext();
     if (!ctx.inGitRepo || !ctx.headSha) {
-      if (own) await s.close();
+      if (own) {await s.close();}
       process.exit(0);
     }
     const parents = ctx.parents || [];
@@ -27,11 +27,11 @@ async function main(store = null) {
     if (ctx.branchName) {
       await s.upsertBranch({ name: ctx.branchName, forkCommitSha: ctx.headSha });
     }
-    if (own) await s.close();
+    if (own) {await s.close();}
     process.exit(0);
   } catch (error) {
     console.error('Error en commitScript.js:', error.message);
-    try { if (own) await s.close(); } catch {}
+    try { if (own) {await s.close();} } catch {}
     process.exit(1);
   }
 }
