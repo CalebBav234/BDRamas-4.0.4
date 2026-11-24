@@ -1,6 +1,42 @@
 ﻿# Guía de testing completo (BDRamas / TDD tracking)
 
-Para probar la entrega del sprint, sigue las secciones 1 y 2 y continúa en [Prueba de principio a fin con la API](#prueba-de-principio-a-fin-con-la-api). Las secciones 3 a 5 explican cómo inspeccionar SQLite y los hooks por separado.
+Si ya tienes BDRamas y TDDLab en la laptop de Caleb, sigue [Actualizar y reenviar el commit de Caleb](#actualizar-y-reenviar-el-commit-de-caleb). Para instalar desde cero, empieza por la sección 1.
+
+## Actualizar y reenviar el commit de Caleb
+
+El primer push de `0557321` llegó a GitHub con `--no-verify`. Estos pasos recuperan ese commit para la API y dejan preparado el envío automático en los próximos pushes. Usa PowerShell y los dos directorios que aparecen en el registro de la laptop.
+
+**1. Actualiza el proyecto base.** Detén el servidor abierto con `Ctrl+C`. En una terminal ejecuta los siguientes comandos y continúa si cada uno termina correctamente.
+
+```powershell
+cd "$HOME\Downloads\BDRamas\BDRamas-4.0.4"
+git switch feat/registrar-actividad-tdd-en-push
+git pull --ff-only origin feat/registrar-actividad-tdd-en-push
+npm.cmd ci
+```
+
+**2. Prepara el servidor del equipo.** La corrección incluida en esta rama se probó con TDDLab `6d990021`. El primer comando comprueba los parches y los aplica en la copia local del servidor. Se puede repetir. Si Git informa de un conflicto, detente y revisa los cambios locales del servidor.
+
+```powershell
+npm.cmd run api:preparar -- "$HOME\Downloads\tallerSoft\TDDLab"
+cd "$HOME\Downloads\tallerSoft\TDDLab\server"
+npm.cmd run db:migrar-ramas
+npm.cmd run dev
+```
+
+Usa la configuración PostgreSQL **de desarrollo** de TDDLab (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` en el entorno del servidor o su archivo `.env`). Si es la primera instalación del servidor, ejecuta `npm.cmd ci` en `TDDLab\server` antes de la migración. La migración requiere permiso para crear y modificar las tablas TDD. Prepara una base vacía o actualiza el modelo UUID de TDDLab en una transacción. Si falla, revisa el error antes de iniciar el servidor. El proyecto base envía la actividad por HTTP.
+
+**3. Reenvía el commit.** Mantén abierta la terminal que muestra `Server is running on port: 3000` y abre una segunda terminal.
+
+```powershell
+cd "$HOME\Downloads\BDRamas\BDRamas-4.0.4"
+$env:TDD_BRANCHES_URL = "http://localhost:3000/api/TDDCycles/branches/branches"
+npm.cmd run db:sync -- --commit 0557321
+```
+
+Busca `[pre-push] API:` y los cuatro contadores. En una base limpia se registra un commit con el mensaje `testing:pruebita`. Si no había ejecuciones de Jest guardadas para ese SHA, el contador de ejecuciones es cero. Puedes repetir el comando para comprobar que los contadores nuevos quedan en cero. Para probar el commit actualmente seleccionado y enviar su resultado, ejecuta `npm.cmd run test:app` y después `npm.cmd run db:sync`. En futuros commits basta con un `git push` normal para activar el envío.
+
+Los dos parches y su aplicador se distribuyen desde BDRamas. [Esquema](docs/servidor-tddlab/01-esquema.patch) · [Guardado del lote](docs/servidor-tddlab/02-registro.patch)
 
 > Entorno de referencia: Windows + PowerShell. Ajusta rutas/comandos si usas otro shell.
 
@@ -37,7 +73,7 @@ La rama debe ser `feat/registrar-actividad-tdd-en-push`. La instalación activa 
    npm run build
    ```
 
-   En la entrega del sprint pasan 27 pruebas (1 de la aplicación, 17 del ejecutor TDD y 9 de ramas y envío). Parcel genera `dist/index.html`.
+   En la entrega del sprint pasan 28 pruebas (1 de la aplicación, 17 del ejecutor TDD y 10 de ramas y envío). Parcel genera `dist/index.html`.
 
 2. **Para repetir únicamente la prueba de ramas y del POST**, ejecuta el siguiente comando. La suite crea su propio servidor HTTP y remoto Git temporales. Cubre el primer push, ambos tipos de merge y el reintento tras un HTTP 503. Puedes correrla incluso con la API del equipo apagada.
 
@@ -218,16 +254,18 @@ Usa una misma ventana de PowerShell para los pasos 1 a 5. El último paso public
    git rev-parse HEAD
    ```
 
-   El hook envía un único `POST` JSON con `repository`, `branches`, `commits` y `merges`. Dentro de cada commit van `commitedAt` y `tddExecutions`. Para este ejemplo la API debería confirmar **2 ramas, 2 commits, 1 merge y 1 ejecución**. Busca la línea `[pre-push] API:` y comprueba que el SHA remoto coincide con `HEAD`. Para verificar la persistencia, consulta la base del backend con el SHA que guardaste en el paso 2.
+   El hook envía un único `POST` JSON con `repository`, `branches`, `commits` y `merges`. Dentro de cada commit van `commitedAt` y `tddExecutions`. Con la base preparada y las dos ramas nuevas, el recibo debe incluir **2 ramas, 2 commits, 1 merge y 1 ejecución**. Si ya se habían recibido datos, los contadores reflejan solo los registros nuevos. Busca la línea `[pre-push] API:` y comprueba que el SHA remoto coincide con `HEAD`. Para verificar la persistencia, consulta la base del backend con el SHA que guardaste en el paso 2.
 
    ```sql
    SELECT c.sha, e.tests_total, e.tests_passed, e.tests_failed
    FROM tdd_commit AS c
    JOIN tdd_execution AS e ON e.commit_sha = c.sha
-   WHERE c.sha = '<pega aquí el SHA del paso 2>';
+   JOIN tdd_repository AS r ON r.id = e.repo_id
+   WHERE r.owner = 'CalebBav234' AND r.repos_name = 'BDRamas-4.0.4'
+     AND c.sha = '<pega aquí el SHA del paso 2>';
    ```
 
-**Reintento del push.** Si se rechaza la conexión, revisa la URL y que el backend esté escuchando. Con HTTP 500, revisa el error en la consola del servidor. En la revisión del 24/11/2026, el backend solicitaba `tdd_repository.created_at` y `tdd_commit.branchi_id`, incompatibles con el esquema publicado. Las claves de rama de `tdd_merge` también tenían tipos incompatibles. Una vez corregida la causa, repite `git push -u origin $destino` desde la misma terminal. La ejecución original sigue en SQLite. [Consultas del backend revisado](https://github.com/UCB-TallerSoft-2026-2/TDDLab/blob/ef9ad6f18c6a5954d82b912465c53ec76d69a7ab/server/src/modules/TDDCycles/Repositories/DBBranchRepository.ts) · [Esquema revisado](https://github.com/UCB-TallerSoft-2026-2/TDDLab/blob/ef9ad6f18c6a5954d82b912465c53ec76d69a7ab/ModeloDatos/database/schema.sql)
+**Reintento del push.** Si se rechaza la conexión, comprueba la URL y que el servidor esté escuchando. Si responde con HTTP 500, revisa el error en la consola de TDDLab y que hayas aplicado la corrección y ejecutado la migración de esta guía. Después repite `git push -u origin $destino`. Si el commit ya está en GitHub, usa `npm.cmd run db:sync -- --commit <SHA>`. La API corregida devuelve el número de registros nuevos. Una repetición completa devuelve cero en los cuatro contadores.
 
 Al terminar, vuelve a la rama de la entrega con `git switch feat/registrar-actividad-tdd-en-push`. Cerrar la ventana de PowerShell descarta las variables de esta sesión.
 
