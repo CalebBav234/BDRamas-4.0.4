@@ -7,3 +7,11 @@ dist
 report.json
 ./.husky/_
 .husky/.commit-state
+.env
+
+# Base de datos local TDD
+.tddlab/
+*.db
+*.db-shm
+*.db-wal
+.env.local

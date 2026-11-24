@@ -1,47 +1,48 @@
-import { execSync } from 'child_process';
-import { fileURLToPath } from 'url';
-import fs from 'fs';
-import path from 'path';
-import { getLastTestId } from './id_execution_tests_commit.js';
+﻿import { LocalTddStore } from './localTddStore.js';
+import { TddStore as RemoteTddStore } from './tddStore.js';
+import { captureGitContext, getCommitAuthor, getCommitDate } from './gitContext.js';
 
-const getLatestCommitName = () => {
-    const commitName = execSync('git log -1 --pretty=%B').toString().trim();
-    return commitName;
-};
-
-const updateJsonFile = () => {
-    const __filename = fileURLToPath(import.meta.url);
-    const __dirname = path.dirname(__filename);
-    const filePath = path.join(__dirname, 'tdd_log.json');
-    const commitTimestamp = Date.now();
-    const commitName = getLatestCommitName();
-    let testId = getLastTestId(filePath);
-
-    let existingData = [];
-    try {
-        const fileData = fs.readFileSync(filePath, 'utf8');
-        existingData = JSON.parse(fileData);
-    } catch (err) {
-        if (err.code !== 'ENOENT') {
-            console.error('Error reading JSON file:', err);
-            return;
-        }
+async function main(store = null) {
+  const own = !store;
+  const s = store || new LocalTddStore();
+  try {
+    await s.initialize();
+    const ctx = captureGitContext();
+    if (!ctx.inGitRepo || !ctx.headSha) {
+      if (own) await s.close();
+      process.exit(0);
     }
-
-    const headIndex = existingData.findIndex(entry => entry.commitId === 'HEAD');
-    if (headIndex > -1) {
-        try {
-            const realSha = execSync('git rev-parse HEAD~1').toString().trim();
-            existingData[headIndex].commitId = realSha;
-        } catch (error) {
-            console.error('Could not get previous commit SHA:', error);
-        }
+    const parents = ctx.parents || [];
+    const parentSha = parents.length > 0 ? parents[0] : null;
+    const author = getCommitAuthor({ sha: ctx.headSha }) || null;
+    const committedAt = getCommitDate({ sha: ctx.headSha }) || null;
+    await s.upsertCommit({
+      sha: ctx.headSha,
+      parentSha: parentSha || null,
+      branch: ctx.branchName || null,
+      author,
+      message: ctx.commitMessage || null,
+      committedAt
+    });
+    if (ctx.branchName) {
+      await s.upsertBranch({ name: ctx.branchName, forkCommitSha: ctx.headSha });
     }
+    if (own) await s.close();
+    process.exit(0);
+  } catch (error) {
+    console.error('Error en commitScript.js:', error.message);
+    try { if (own) await s.close(); } catch {}
+    process.exit(1);
+  }
+}
 
-    const data = { commitId: 'HEAD', commitName, commitTimestamp, testId };
-    existingData.push(data);
+if (process.env.NODE_ENV !== 'test' && !process.env.JEST_WORKER_ID) {
+  try {
+    main().catch((error) => {
+      console.error('Error en commitScript.js:', error.message);
+      process.exit(1);
+    });
+  } catch {}
+}
 
-    fs.writeFileSync(filePath, JSON.stringify(existingData, null, 2));
-};
-
-updateJsonFile();
+export { RemoteTddStore as TddStore, main };
