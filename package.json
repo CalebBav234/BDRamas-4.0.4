@@ -21,6 +21,7 @@
                     "db:init":  "node ./script/init-db.js",
                     "db:init:local":  "node ./script/init-db.js --local",
                     "db:init:remote":  "node ./script/init-db.js --remote",
+                    "api:preparar":  "node ./script/preparar-api.js",
                     "db:sync":  "node ./script/pre-push-sync.js",
                     "db:pre-commit":  "node ./script/pre-commit-tracker.js",
                     "cypress":  "cypress open",
