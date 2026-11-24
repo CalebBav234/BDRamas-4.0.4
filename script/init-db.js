@@ -1,8 +1,7 @@
 ﻿import 'dotenv/config';
-import fs from 'fs';
 import LocalTddStore from './localTddStore.js';
-import { TddStore as RemoteTddStore } from './tddStore.js';
-import { ensureSafeRemoteUrl, redactError } from './db-security.js';
+import NeonActivityStore from './neonActivityStore.js';
+import { redactError } from './db-security.js';
 
 export async function initializeSchema({ local = true, remote = false, dbPath = null } = {}) {
   let localStore = null;
@@ -14,16 +13,18 @@ export async function initializeSchema({ local = true, remote = false, dbPath = 
       console.log(`[init-db] Esquema SQLite inicializado en: ${localStore.dbPath}`);
     }
     if (remote) {
-      if (!process.env.DATABASE_URL) throw new Error('DATABASE_URL no está configurada para inicializar la BD remota');
-      ensureSafeRemoteUrl(process.env.DATABASE_URL);
-      remoteStore = new RemoteTddStore();
+      remoteStore = new NeonActivityStore();
       await remoteStore.initialize();
-      console.log('[init-db] Esquema PostgreSQL remoto inicializado correctamente.');
+      console.log('[init-db] Esquema Neon validado correctamente.');
     }
     return { ok: true };
   } finally {
-    if (localStore) await localStore.close();
-    if (remoteStore) await remoteStore.close();
+    if (localStore) {
+      await localStore.close();
+    }
+    if (remoteStore) {
+      await remoteStore.close();
+    }
   }
 }
 

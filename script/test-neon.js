@@ -1,29 +1,23 @@
 import 'dotenv/config';
-import pg from 'pg';
-
-const { Pool } = pg;
+import NeonActivityStore from './neonActivityStore.js';
+import { redactError } from './db-security.js';
 
 if (!process.env.DATABASE_URL) {
   console.error('DATABASE_URL no está configurada.');
   process.exitCode = 1;
 } else {
-  const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
+  let store;
   try {
-    const result = await pool.query(`
-      SELECT table_name
-      FROM information_schema.tables
-      WHERE table_schema = 'public'
-        AND table_name IN ('tdd_branch', 'tdd_commit', 'tdd_merge', 'tdd_execution')
-      ORDER BY table_name
-    `);
-
+    store = new NeonActivityStore();
+    await store.initialize();
+    await store.pool.query('SELECT 1');
     console.log('Conexión exitosa con Neon.');
-    console.log('Tablas TDD disponibles:', result.rows.map((row) => row.table_name));
   } catch (error) {
-    console.error('Error al conectar con Neon:', error.message);
+    console.error('Error al conectar con Neon:', redactError(error));
     process.exitCode = 1;
   } finally {
-    await pool.end();
+    if (store) {
+      await store.close();
+    }
   }
 }

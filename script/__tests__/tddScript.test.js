@@ -118,6 +118,18 @@ describe(
       expect(mockSpawn).toHaveBeenCalled();
     });
 
+    it('conserva SQLite y reporta el fallo si Neon no acepta la ejecución', async () => {
+      const neonStore = {
+        saveTestExecution: jest.fn().mockRejectedValue(new Error('Neon unavailable'))
+      };
+
+      const result = await extractAndAddObject(reportFile, store, neonStore);
+
+      expect(result.persistenceError).toMatchObject({ message: 'Neon unavailable' });
+      expect(await store.getExecutionById(result.executionId)).toBeDefined();
+      expect(neonStore.saveTestExecution).toHaveBeenCalled();
+    });
+
     it(
       'debe registrar la ejecucion aunque el reporte de Jest no tenga endTime',
       async () => {
@@ -396,7 +408,7 @@ describe(
       }
     );
 
-    it('guarda la ejecución en SQLite aunque DATABASE_URL esté configurada', async () => {
+    it('guarda localmente y envía la ejecución a Neon', async () => {
       const previousEnv = process.env;
       const dbPath = path.join(tmpDir, 'registro.db');
       const local = new LocalTddStore({ dbPath });
@@ -406,10 +418,20 @@ describe(
         delete process.env.TDD_BRANCHES_URL;
         process.chdir(tmpDir);
         const { main } = await import('../tddScript.js');
-        await main();
+        const neonStore = { saveTestExecution: jest.fn().mockResolvedValue(1) };
+        await main(undefined, undefined, neonStore);
         expect(process.exitCode).toBe(0);
         const run = await local.getExecutionById(1);
         expect(run.tests_passed).toBe(3);
+        expect(neonStore.saveTestExecution).toHaveBeenCalledWith(
+          expect.objectContaining({
+            execution: expect.objectContaining({
+              testsTotal: 3,
+              testsPassed: 3,
+              testsFailed: 0
+            })
+          })
+        );
       } finally {
         await local.close();
         process.chdir(previousCwd);
@@ -428,7 +450,7 @@ describe(
 
         try {
           const mod = await import('../tddScript.js');
-          await mod.main();
+          await mod.main(undefined, undefined, { saveTestExecution: jest.fn() });
           expect(process.exitCode).toBe(0);
         } finally {
           process.chdir(originalCwd);
@@ -450,7 +472,7 @@ describe(
           const mod = await import('../tddScript.js');
 
           jest.spyOn(LocalTddStore.prototype, 'initialize').mockRejectedValue(new Error('DB init failed'));
-          await mod.main();
+          await mod.main(undefined, undefined, { saveTestExecution: jest.fn() });
           expect(process.exitCode).toBe(1);
         } finally {
           process.chdir(originalCwd);
