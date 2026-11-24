@@ -4,7 +4,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { createServer } from 'node:http';
-import { postBranchActivity, useBranchApi } from '../branch-api.js';
+import { postBranchActivity } from '../branch-api.js';
 import test from 'node:test';
 import LocalTddStore from '../localTddStore.js';
 import { collectBranchPush } from '../collect-branch-push.js';
@@ -88,10 +88,18 @@ test('incluye los merges del rango con su indicador de fast-forward', () => {
   assert.equal(merges[1].isFastForward, true);
 });
 
-test('usa la API local por defecto y respeta una configuración existente de Neon', () => {
-  assert.equal(useBranchApi({}), true);
-  assert.equal(useBranchApi({ DATABASE_URL: 'postgresql://servidor/db' }), false);
-  assert.equal(useBranchApi({ DATABASE_URL: 'postgresql://servidor/db', TDD_BRANCHES_URL: 'http://localhost:3000/api' }), true);
+test('usa el endpoint local aunque el entorno tenga DATABASE_URL', async t => {
+  const originalEnv = process.env;
+  process.env = { ...originalEnv, DATABASE_URL: 'postgresql://127.0.0.1:1/prueba' };
+  delete process.env.TDD_BRANCHES_URL;
+  t.after(() => { process.env = originalEnv; });
+  const repository = { slug: 'equipo/base' };
+  const reply = { repository, branchesSaved: 0, commitsSaved: 0, executionsSaved: 0, mergesSaved: 0 };
+  const send = t.mock.method(globalThis, 'fetch', async () => Response.json(reply));
+  await postBranchActivity({ repository, branches: [], commits: [], merges: [] });
+  const [endpoint, options] = send.mock.calls[0].arguments;
+  assert.equal(endpoint, 'http://localhost:3000/api/TDDCycles/branches/branches');
+  assert.equal(options.method, 'POST');
 });
 
 test('envía un único POST y exige confirmación del servidor', async t => {

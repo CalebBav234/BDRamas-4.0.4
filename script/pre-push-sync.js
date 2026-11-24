@@ -2,16 +2,18 @@
 import fs from 'fs';
 import LocalTddStore from './localTddStore.js';
 import { collectBranchPush } from './collect-branch-push.js';
-import { postBranchActivity, useBranchApi } from './branch-api.js';
-import { syncLocalToRemote, redactError } from './sync-to-remote.js';
+import { redactError } from './db-security.js';
+import { postBranchActivity } from './branch-api.js';
+import { getCurrentBranch, getHeadSha } from './gitContext.js';
 
-async function readStdin() {
-  try {
-    if (process.stdin.isTTY) return '';
-    return fs.readFileSync(0, 'utf8');
-  } catch {
-    return '';
+function currentBranchUpdate() {
+  const branch = getCurrentBranch();
+  if (!branch) {
+    throw new Error('Selecciona una rama antes de enviar su actividad.');
   }
+  const sha = getHeadSha();
+  const ref = `refs/heads/${branch}`;
+  return `${ref} ${sha} ${ref} ${'0'.repeat(sha.length)}`;
 }
 
 async function main() {
@@ -21,23 +23,14 @@ async function main() {
   const localStore = new LocalTddStore();
   const remote = process.argv[2];
   try {
-    const stdinText = await readStdin();
-    if (remote && useBranchApi()) {
-      const body = await collectBranchPush(localStore, stdinText, remote);
-      if (body) {
-        const saved = await postBranchActivity(body);
-        console.log(`[pre-push] API: ${saved.branchesSaved} ramas, ${saved.commitsSaved} commits, ${saved.mergesSaved} merges y ${saved.executionsSaved} ejecuciones.`);
-      }
-      return;
+    let refs = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8');
+    if (!remote && !refs.trim()) {
+      refs = currentBranchUpdate();
     }
-    const result = await syncLocalToRemote({ localStore, stdinText });
-    const commits = result.payload?.commits?.length || 0;
-    const execs = result.payload?.executions?.length || 0;
-    const merges = result.payload?.merges?.length || 0;
-    if (result.skipped) {
-      console.log(`[pre-push-sync] Sin datos nuevos para sincronizar (${result.reason || 'omitido'}).`);
-    } else {
-      console.log(`[pre-push-sync] Sincronizado a BD remota: commits=${commits}, ejecuciones=${execs}, merges=${merges}.`);
+    const body = await collectBranchPush(localStore, refs, remote || 'origin');
+    if (body) {
+      const saved = await postBranchActivity(body);
+      console.log(`[pre-push] API: ${saved.branchesSaved} ramas, ${saved.commitsSaved} commits, ${saved.mergesSaved} merges y ${saved.executionsSaved} ejecuciones.`);
     }
   } catch (error) {
     console.error('[pre-push] Sincronización pendiente:', redactError(error));

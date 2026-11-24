@@ -1,9 +1,5 @@
 const defaultEndpoint = 'http://localhost:3000/api/TDDCycles/branches/branches';
 
-export function useBranchApi(env = process.env) {
-  return Boolean(env.TDD_BRANCHES_URL) || !env.DATABASE_URL;
-}
-
 export async function postBranchActivity(payload, endpoint = process.env.TDD_BRANCHES_URL || defaultEndpoint) {
   const response = await fetch(endpoint, {
     method: 'POST',
