@@ -1,7 +1,7 @@
 ﻿import 'dotenv/config';
 import fs from 'fs';
 import LocalTddStore from './localTddStore.js';
-import { collectBranchPush } from './collect-branch-push.js';
+import { collectBranchPush, collectCommitPush } from './collect-branch-push.js';
 import { redactError } from './db-security.js';
 import { postBranchActivity } from './branch-api.js';
 import { getCurrentBranch, getHeadSha } from './gitContext.js';
@@ -23,11 +23,14 @@ async function main() {
   const localStore = new LocalTddStore();
   const remote = process.argv[2];
   try {
-    let refs = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8');
-    if (!remote && !refs.trim()) {
-      refs = currentBranchUpdate();
+    let body;
+    if (remote === '--commit') {
+      body = await collectCommitPush(localStore, process.argv[3]);
+    } else {
+      let refs = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8');
+      if (!remote && !refs.trim()) refs = currentBranchUpdate();
+      body = await collectBranchPush(localStore, refs, remote || 'origin');
     }
-    const body = await collectBranchPush(localStore, refs, remote || 'origin');
     if (body) {
       const saved = await postBranchActivity(body);
       console.log(`[pre-push] API: ${saved.branchesSaved} ramas, ${saved.commitsSaved} commits, ${saved.mergesSaved} merges y ${saved.executionsSaved} ejecuciones.`);

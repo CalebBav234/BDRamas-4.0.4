@@ -1,4 +1,5 @@
-import { getRemoteUrl } from './gitContext.js';
+import { execFileSync } from 'node:child_process';
+import { getCurrentBranch, getRemoteUrl } from './gitContext.js';
 import { collectSyncPayload, computePushCommitShas, readPrePushRefsFromStdin } from './sync-to-remote.js';
 import { branchForApi, commitsForApi, mergesForApi, repositoryFromRemote } from './branch-push-payload.js';
 
@@ -20,6 +21,24 @@ export async function collectBranchPush(localStore, stdinText, remote = 'origin'
   }
 
   return buildBranchPush(localStore, remote, cwd, updates, branchesBySha);
+}
+
+export async function collectCommitPush(localStore, revision, cwd = process.cwd()) {
+  if (!/^[0-9a-f]{4,64}$/i.test(revision || '')) {
+    throw new Error('Indica el SHA del commit, por ejemplo: npm run db:sync -- --commit 0557321');
+  }
+  const branch = getCurrentBranch({ cwd });
+  if (!branch) throw new Error('Selecciona la rama que contiene el commit.');
+  let sha;
+  try {
+    const options = { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] };
+    sha = execFileSync('git', ['rev-parse', '--verify', revision + '^{commit}'], options).trim();
+    execFileSync('git', ['merge-base', '--is-ancestor', sha, 'HEAD'], options);
+  } catch {
+    throw new Error('Verifica que el SHA identifica un commit de la rama activa.');
+  }
+  const update = { remoteRef: 'refs/heads/' + branch, localSha: sha };
+  return buildBranchPush(localStore, 'origin', cwd, [update], new Map([[sha, branch]]));
 }
 
 async function buildBranchPush(localStore, remote, cwd, updates, branchesBySha) {

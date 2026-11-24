@@ -87,4 +87,10 @@ test('Git conserva el push pendiente y envía el mismo registro al reintentar', 
   await manual;
   assert.equal(received.length, 4);
   assert.deepEqual(received.at(-1).commits.map(c => c.commitSha), [tip]);
+
+  await exec(process.execPath, [path.join(project, 'script/pre-push-sync.js'), '--commit', featureSha.slice(0, 8)], { cwd, env });
+  assert.deepEqual(received.at(-1).commits.map(c => c.commitSha), [featureSha]);
+  assert.equal(received.at(-1).commits[0].tddExecutions[0].testsPassed, 1);
+  await assert.rejects(exec(process.execPath, [path.join(project, 'script/pre-push-sync.js'), '--commit', 'HEAD'], { cwd, env }));
+  assert.equal(received.length, 5);
 });
