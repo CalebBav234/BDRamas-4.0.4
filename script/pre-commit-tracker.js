@@ -28,7 +28,7 @@ export async function trackPreCommit(store = new LocalTddStore()) {
 }
 
 async function main() {
-  if (process.env.HUSKY_SKIP_TRACK === '1') process.exit(0);
+  if (process.env.HUSKY_SKIP_TRACK === '1') {process.exit(0);}
   try {
     await trackPreCommit();
     process.exit(0);

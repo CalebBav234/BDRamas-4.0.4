@@ -19,9 +19,9 @@ export function readPrePushRefsFromStdin(stdinText = '') {
 function isZeroSha(sha) { return /^0+$/.test(sha || ''); }
 
 export function getCommitsInRange(rangeSpec, cwd = process.cwd(), extraArgs = []) {
-  if (!rangeSpec) return [];
+  if (!rangeSpec) {return [];}
   const out = runGit(['rev-list', '--reverse', rangeSpec, ...extraArgs], cwd);
-  if (!out) return [];
+  if (!out) {return [];}
   return out.split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
 }
 
@@ -29,13 +29,13 @@ export function computePushCommitShas(refUpdates, cwd = process.cwd(), remoteNam
   const shas = new Set();
   for (const ref of refUpdates) {
     const { localSha, remoteSha } = ref;
-    if (isZeroSha(localSha)) continue; // delete
+    if (isZeroSha(localSha)) {continue;} // delete
     const newBranch = isZeroSha(remoteSha);
     const range = newBranch ? localSha : `${remoteSha}..${localSha}`;
     const excludePublished = newBranch ? ['--not', `--remotes=${remoteName}`] : [];
     const listed = getCommitsInRange(range, cwd, excludePublished);
-    if (listed.length) listed.forEach((s) => shas.add(s));
-    else if (!isZeroSha(localSha)) shas.add(localSha); // fast-forward/direct
+    if (listed.length) {listed.forEach((s) => shas.add(s));}
+    else if (!isZeroSha(localSha)) {shas.add(localSha);} // fast-forward/direct
   }
   return Array.from(shas);
 }
@@ -46,19 +46,19 @@ export async function collectSyncPayload(localStore, commitShas, { branchName = 
     ? await localStore.getCommitsByShas(commitShas)
     : (branchName ? await localStore.getCommitsByBranch(branchName) : await localStore.getAllCommits());
   const shaSet = new Set((commits || []).map((c) => c.sha));
-  if (commitShas) commitShas.forEach((s) => shaSet.add(s));
+  if (commitShas) {commitShas.forEach((s) => shaSet.add(s));}
   const shas = Array.from(shaSet);
   const executions = shas.length ? await localStore.getExecutionsByCommitShas(shas) : [];
   const merges = shas.length ? await localStore.getMergesByCommitShas(shas) : [];
   const branches = new Set();
-  for (const c of commits || []) if (c.branch) branches.add(c.branch);
-  for (const m of merges || []) { if (m.source_branch) branches.add(m.source_branch); if (m.target_branch) branches.add(m.target_branch); }
-  if (branchName) branches.add(branchName);
+  for (const c of commits || []) {if (c.branch) {branches.add(c.branch);}}
+  for (const m of merges || []) { if (m.source_branch) {branches.add(m.source_branch);} if (m.target_branch) {branches.add(m.target_branch);} }
+  if (branchName) {branches.add(branchName);}
   const branchRows = [];
   for (const name of branches) {
     const b = await localStore.getBranch(name);
-    if (b) branchRows.push(b);
-    else branchRows.push({ name, fork_commit_sha: null });
+    if (b) {branchRows.push(b);}
+    else {branchRows.push({ name, fork_commit_sha: null });}
   }
   return { branches: branchRows, commits: commits || [], merges: merges || [], executions: executions || [] };
 }

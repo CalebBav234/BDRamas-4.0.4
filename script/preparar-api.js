@@ -15,8 +15,8 @@ function prepararServidor(ruta) {
   for (const nombre of ['01-esquema.patch', '02-registro.patch']) {
     const parche = fileURLToPath(new URL('../docs/servidor-tddlab/' + nombre, import.meta.url));
     const aplicado = spawnSync('git', ['apply', '--reverse', '--check', parche], { cwd, encoding: 'utf8' });
-    if (aplicado.error) throw aplicado.error;
-    if (aplicado.status !== 0) pendientes.push(parche);
+    if (aplicado.error) {throw aplicado.error;}
+    if (aplicado.status !== 0) {pendientes.push(parche);}
   }
   if (!pendientes.length) {
     console.log('La corrección ya está aplicada en esta copia de TDDLab.');

@@ -9,7 +9,7 @@ export async function trackCommit(store = null) {
     await s.initialize();
     const ctx = captureGitContext();
     if (!ctx.inGitRepo || !ctx.headSha) {
-      if (own) await s.close();
+      if (own) {await s.close();}
       return { skipped: true };
     }
     const parents = ctx.parents || [];
@@ -24,16 +24,16 @@ export async function trackCommit(store = null) {
     if (ctx.branchName) {
       await s.upsertBranch({ name: ctx.branchName, forkCommitSha: ctx.headSha });
     }
-    if (own) await s.close();
+    if (own) {await s.close();}
     return { ok: true, sha: ctx.headSha };
   } catch (error) {
-    try { if (own) await s.close(); } catch {}
+    try { if (own) {await s.close();} } catch {}
     throw error;
   }
 }
 
 async function main(store = null) {
-  if (process.env.HUSKY_SKIP_TRACK === '1') process.exit(0);
+  if (process.env.HUSKY_SKIP_TRACK === '1') {process.exit(0);}
   try {
     await trackCommit(store);
     process.exit(0);
