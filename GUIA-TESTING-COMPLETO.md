@@ -231,77 +231,19 @@ Usa una misma ventana de PowerShell para los pasos 1 a 5. El último paso public
 
 Al terminar, vuelve a la rama de la entrega con `git switch feat/registrar-actividad-tdd-en-push`. Cerrar la ventana de PowerShell descarta las variables de esta sesión.
 
-### Sincronización directa con PostgreSQL/Neon
+## 7. Enviar al endpoint desde la terminal
 
-Para probar este modo alternativo, abre otra sesión y configura solo `DATABASE_URL` con la conexión de tu base PostgreSQL de pruebas. Si usas `.env`, deja `TDD_BRANCHES_URL` sin definir. El comando `npm run db:sync` utiliza la sincronización directa con PostgreSQL.
+Con el backend en ejecución, puedes enviar la actividad de la rama activa sin publicar una referencia en GitHub. Desde la raíz de BDRamas, ejecuta en PowerShell:
 
-El hook `.husky/pre-push` ejecuta `script/pre-push-sync.js`, que:
-- lee refs desde stdin del push,
-- calcula commits de la rama a subir,
-- extrae de SQLite solo datos relevantes (commits/rama/ejecuciones/merges relacionados),
-- valida `DATABASE_URL` y sincroniza al remoto,
-- **aborta el push** si falla la sincronización (a menos que se omita explícitamente).
-
-### 6.1 Verificación de seguridad de configuración (sin exponer secretos)
 ```powershell
-node -e "import('./script/db-security.js').then(m=>{try{console.log(m.validateDatabaseUrl(process.env.DATABASE_URL,{requireSsl:false}))}catch(e){console.error('invalid:',e.message)}})"
+$env:TDD_BRANCHES_URL = "http://localhost:3000/api/TDDCycles/branches/branches"
+npm.cmd run test:app
+npm.cmd run db:sync
 ```
-- Requiere que `DATABASE_URL` esté cargada en el entorno (p. ej. dotenv lo carga en scripts; para esta prueba rápida puedes ejecutar desde Node con `-r dotenv/config` o usar los scripts npm). Alternativa:
-```powershell
-node -r dotenv/config -e "import('./script/db-security.js').then(m=>{try{console.log(m.validateDatabaseUrl(process.env.DATABASE_URL))}catch(e){console.error('invalid:',e.message)}})"
-```
-- Esperado: objeto con `host/database/sslmode/secure/masked` sin mostrar contraseña en claro. Si es inválida o insegura según flags, muestra error.
 
-### 6.2 Inicializar esquema remoto (si aplica)
-```powershell
-npm run db:init:remote
-```
-- Esperado: esquema PostgreSQL remoto inicializado (requiere `DATABASE_URL` válida y accesible).
+El primer comando de npm guarda el resultado en SQLite junto al SHA actual. El segundo prepara el JSON para el remoto `origin` y lo envía mediante `fetch` con método `POST`. Incluye los commits nuevos respecto a las referencias locales de ese remoto, o el último commit cuando ya están publicados. También puedes usar el envío automático del paso 5 de la sección 6. Cada envío manual genera una petición nueva.
 
-### 6.3 Prueba de sync (simulada por stdin)
-`pre-push` recibe líneas `localRef localSha remoteRef remoteSha` por stdin. Puedes simular sin hacer push real:
-```powershell
-$head = git rev-parse HEAD
-$branch = git rev-parse --abbrev-ref HEAD
-"$("refs/heads/$branch") $head $("refs/remotes/origin/$branch") 0000000000000000000000000000000000000000" | node ./script/pre-push-sync.js
-```
-- Ajusta `remoteSha` a un SHA real remoto si quieres sincronizar solo un rango incremental.
-- Esperado: mensaje `[pre-push-sync] Sincronizado...` o “sin datos nuevos”. Con `DATABASE_URL` inválida/inaccesible: error enmascarado y exit code != 0 (comportamiento deseado antes de un push real).
-
-### 6.4 Prueba de push real (controlada)
-- Haz push de una rama de prueba a un remoto de prueba:
-  ```powershell
-  git push -u origin test/db-hooks-verification
-  ```
-- Esperado: si hay datos y credenciales válidas, sincroniza y luego continúa el push; si falla, el push se aborta con mensaje de sincronización.
-
-### 6.5 Omitir sync (solo pruebas controladas)
-```powershell
-$env:SKIP_DB_SYNC = "1"; git push; Remove-Item Env:SKIP_DB_SYNC
-```
-- Esperado: omite la sincronización de BD. **No recomendado** en flujo normal (pierde trazabilidad remota).
-
----
-
-## 7. Verificar scripts remotos/Neon existentes (opcionales según entorno)
-
-1. **Conectividad y tablas remotas**
-   ```powershell
-   npm run test:neon
-   ```
-   - Requiere `DATABASE_URL`. Esperado: conexión exitosa y listado de tablas TDD disponibles.
-
-2. **Integración real Neon (opt-in)**
-   ```powershell
-   $env:RUN_NEON_INTEGRATION = "1"; npm run test:neon:integration; Remove-Item Env:RUN_NEON_INTEGRATION
-   ```
-   - Esperado: pruebas de inserción/rollback y limpieza (según implementación del script).
-
-3. **Flujo de app que registra ejecución remota**
-   ```powershell
-   npm run test:app
-   ```
-   - Requiere `DATABASE_URL` y repo Git (según `script/tddScript.js`/store remoto). Esperado: ejecuta Jest, genera/lee reporte y registra ejecución en la BD remota configurada.
+La URL local del ejemplo es el valor predeterminado. Para usar un backend compartido, configura la URL que indique el equipo. El cliente solo necesita acceso HTTP al backend.
 
 ---
 
@@ -309,8 +251,6 @@ $env:SKIP_DB_SYNC = "1"; git push; Remove-Item Env:SKIP_DB_SYNC
 
 - [ ] `.env` no está versionado (`git status` limpio respecto a `.env`).
 - [ ] `.env.example` no contiene secretos reales.
-- [ ] `DATABASE_URL` usa `sslmode=require` (o SSL equivalente) fuera de local; `REQUIRE_DB_SSL=1` en entornos estrictos.
-- [ ] Errores de BD no exponen credenciales (mensajes enmascarados por `db-security`).
 - [ ] La base de la demostración `.tddlab/prueba-api.db` queda fuera del commit.
 - [ ] Hooks pueden omitirse solo con `HUSKY_SKIP_TRACK=1` / `SKIP_DB_SYNC=1` de forma consciente.
 
@@ -322,9 +262,7 @@ $env:SKIP_DB_SYNC = "1"; git push; Remove-Item Env:SKIP_DB_SYNC
 |---|---|---|
 | Solo quiero repetir las pruebas del ejecutor TDD | `npm test` incluye tres grupos de pruebas | Ejecuta `npm run test:runner` |
 | Error de parseo JSON/BOM en `package.json` | Archivo con BOM | Re-guardar `package.json` como UTF-8 sin BOM |
-| `DATABASE_URL no está configurada` | Falta `.env` o variable | Crear `.env` desde `.env.example` y definir `DATABASE_URL` |
-| `DATABASE_URL debe usar SSL...` | `sslmode` ausente/disable con `REQUIRE_DB_SSL=1` | Añadir `sslmode=require` o ajustar flags solo en local controlado |
-| Pre-push aborta | Sync remoto falla o URL inválida | Revisar conectividad/credenciales/SSL; usar `SKIP_DB_SYNC=1` solo si aceptas no sincronizar |
+| Pre-push aborta | El endpoint está inaccesible o ha rechazado los datos | Comprueba la URL, revisa el estado HTTP y reintenta cuando el backend esté disponible |
 | No aparecen datos en SQLite | Hook omitido o commit fuera de repo | Verificar `HUSKY_SKIP_TRACK`, estar en repo Git y repetir operación |
 | Faltan datos en el backend HTTP | La API devolvió un error o el push ya estaba al día | Comprueba la URL, busca la línea `[pre-push] API:` y contrasta los contadores con el SHA en la base del backend |
 | `better-sqlite3` falla al instalar/cargar | Binario nativo incompatible | Reinstalar dependencias (`npm ci`/`npm install`) con toolchain compatible en Windows |
@@ -336,5 +274,5 @@ $env:SKIP_DB_SYNC = "1"; git push; Remove-Item Env:SKIP_DB_SYNC
 - `npm test` ejecuta la aplicación, el ejecutor TDD y las pruebas de ramas y envío.
 - `npm run db:init:local`: crea/actualiza `.tddlab/tddlab.db` con el esquema requerido.
 - Commits/checkouts/merges (incl. fast-forward) en ramas de prueba: generan/actualizan registros en SQLite (`tdd_branch`, `tdd_commit`, `tdd_merge`).
-- Pre-push: con `DATABASE_URL` válida, sincroniza solo los datos necesarios de la rama a PostgreSQL y permite el push; con fallo, bloquea el push.
+- El hook envía la actividad al endpoint y comprueba la confirmación del servidor antes de publicar la rama.
 - El archivo `.env` y la base SQLite de la demostración quedan fuera del commit.
