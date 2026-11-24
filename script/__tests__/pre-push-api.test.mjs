@@ -33,7 +33,7 @@ test('Git conserva el push pendiente y envía el mismo registro al reintentar', 
   t.after(() => new Promise(resolve => server.close(resolve)));
   const env = { ...process.env, HUSKY: '1', HUSKY_SKIP_TRACK: '0', SKIP_DB_SYNC: '0', SQLITE_DB_PATH: dbPath,
     TDD_BRANCHES_URL: `http://127.0.0.1:${server.address().port}/api/TDDCycles/branches/branches` };
-  env.DATABASE_URL = 'postgresql://127.0.0.1:1/prueba';
+  delete env.DATABASE_URL;
   const git = async (...args) => (await exec('git', args, { cwd, env })).stdout.trim();
   await exec('git', ['init', '--quiet', '--bare', bare]);
   await exec('git', ['init', '--quiet', '-b', 'main', cwd]);

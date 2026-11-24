@@ -4,6 +4,7 @@ import LocalTddStore from './localTddStore.js';
 import { collectBranchPush, collectCommitPush } from './collect-branch-push.js';
 import { redactError } from './db-security.js';
 import { postBranchActivity } from './branch-api.js';
+import NeonActivityStore from './neonActivityStore.js';
 import { getCurrentBranch, getHeadSha } from './gitContext.js';
 
 function currentBranchUpdate() {
@@ -21,6 +22,7 @@ async function main() {
     process.exit(0);
   }
   const localStore = new LocalTddStore();
+  let neonStore = null;
   const remote = process.argv[2];
   try {
     let body;
@@ -28,12 +30,20 @@ async function main() {
       body = await collectCommitPush(localStore, process.argv[3]);
     } else {
       let refs = process.stdin.isTTY ? '' : fs.readFileSync(0, 'utf8');
-      if (!remote && !refs.trim()) refs = currentBranchUpdate();
+      if (!remote && !refs.trim()) {
+        refs = currentBranchUpdate();
+      }
       body = await collectBranchPush(localStore, refs, remote || 'origin');
     }
     if (body) {
-      const saved = await postBranchActivity(body);
-      console.log(`[pre-push] API: ${saved.branchesSaved} ramas, ${saved.commitsSaved} commits, ${saved.mergesSaved} merges y ${saved.executionsSaved} ejecuciones.`);
+      let saved;
+      if (process.env.DATABASE_URL || !process.env.TDD_BRANCHES_URL) {
+        neonStore = new NeonActivityStore();
+        saved = await neonStore.savePushActivity(body);
+      } else {
+        saved = await postBranchActivity(body);
+      }
+      console.log(`[pre-push] Neon/API: ${saved.branchesSaved} ramas, ${saved.commitsSaved} commits, ${saved.mergesSaved} merges; las ejecuciones se registran al ejecutar las pruebas.`);
     }
   } catch (error) {
     console.error('[pre-push] Sincronización pendiente:', redactError(error));
@@ -41,6 +51,9 @@ async function main() {
     process.exitCode = 1;
   } finally {
     await localStore.close();
+    if (neonStore) {
+      await neonStore.close();
+    }
   }
 }
 

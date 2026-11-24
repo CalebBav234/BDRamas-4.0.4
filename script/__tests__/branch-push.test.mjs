@@ -16,7 +16,11 @@ const zeroSha = '0'.repeat(40);
 
 function createRepo(t) {
   const cwd = mkdtempSync(path.join(tmpdir(), 'ramas-tdd-'));
-  t.after(() => rmSync(cwd, { recursive: true, force: true }));
+  const cleanups = [];
+  t.after(async () => {
+    for (const cleanup of cleanups) await cleanup();
+    rmSync(cwd, { recursive: true, force: true });
+  });
   const git = (...args) => execFileSync('git', args, { cwd, encoding: 'utf8' }).trim();
   git('init', '--quiet', '-b', 'main');
   git('config', 'user.name', 'Prueba');
@@ -26,7 +30,12 @@ function createRepo(t) {
     git('commit', '--quiet', '--allow-empty', '-m', message);
     return git('rev-parse', 'HEAD');
   };
-  return { cwd, git, commit };
+  return {
+    cwd,
+    git,
+    commit,
+    addCleanup: cleanup => cleanups.push(cleanup),
+  };
 }
 
 test('el primer push incluye los dos commits nuevos de la rama', t => {
@@ -131,14 +140,15 @@ test('envía un único POST y exige confirmación del servidor', async t => {
 });
 
 test('arma el cuerpo con Git y SQLite al subir una rama distinta a la activa', async t => {
-  const { cwd, git, commit } = createRepo(t);
+  const repo = createRepo(t);
+  const { cwd, git, commit } = repo;
   git('remote', 'add', 'equipo', 'https://github.com/equipo/base.git');
   const base = commit('base');
   git('switch', '--quiet', '-c', 'division');
   const sha = commit('dividir');
   git('switch', '--quiet', 'main');
   const store = new LocalTddStore({ dbPath: path.join(cwd, 'tdd.db') });
-  t.after(() => store.close());
+  repo.addCleanup(() => store.close());
   await store.insertExecution({ commitSha: sha, testsTotal: 3, testsPassed: 3, testsFailed: 0 });
   const ref = `refs/heads/division ${sha} refs/heads/division ${base}`;
   const body = await collectBranchPush(store, ref, 'equipo', cwd);
@@ -153,7 +163,8 @@ test('arma el cuerpo con Git y SQLite al subir una rama distinta a la activa', a
 });
 
 test('incluye el origen de un merge aunque el commit ya exista en el remoto Git', async t => {
-  const { cwd, git, commit } = createRepo(t);
+  const repo = createRepo(t);
+  const { cwd, git, commit } = repo;
   git('remote', 'add', 'origin', 'https://github.com/equipo/base.git');
   const base = commit('base');
   git('switch', '--quiet', '-c', 'suma');
@@ -163,7 +174,7 @@ test('incluye el origen de un merge aunque el commit ya exista en el remoto Git'
   git('merge', '--no-ff', 'suma', '-m', 'integrar suma');
   const merge = git('rev-parse', 'HEAD');
   const store = new LocalTddStore({ dbPath: path.join(cwd, 'registro.db') });
-  t.after(() => store.close());
+  repo.addCleanup(() => store.close());
   await store.recordMerge({ sourceBranch: 'suma', targetBranch: 'main', sourceCommitSha: source,
     mergeCommitSha: merge, isFastForward: false });
   await store.insertExecution({ commitSha: source, testsTotal: 1, testsPassed: 1, testsFailed: 0 });
