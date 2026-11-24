@@ -19,6 +19,7 @@ jest.mock('cross-spawn', () => ({
 import { spawn } from 'cross-spawn';
 jest.mock('pg', () => { const { MockPool } = require('../test-helpers/mockPool.js'); class Pool extends MockPool {} return { default: { Pool }, Pool }; });
 import { TddStore } from '../tddStore.js';
+import LocalTddStore from '../localTddStore.js';
 import { extractAndAddObject } from '../tddScript.js';
 import { makePool } from '../test-helpers/mockPool.js';
 
@@ -395,31 +396,27 @@ describe(
       }
     );
 
-    it(
-      'debe ejecutar main sin depender de mkdir para PostgreSQL',
-      async () => {
-        const originalMkdir = fs.mkdirSync;
-        fs.mkdirSync = () => {
-          throw new Error('No se puede crear directorio');
-        };
-
-        const originalCwd = process.cwd();
-        const mainTmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'main-'));
-        process.chdir(mainTmpDir);
+    it('guarda la ejecución en SQLite aunque DATABASE_URL esté configurada', async () => {
+      const previousEnv = process.env;
+      const dbPath = path.join(tmpDir, 'registro.db');
+      const local = new LocalTddStore({ dbPath });
+      const previousCwd = process.cwd();
+      try {
+        process.env = { ...previousEnv, DATABASE_URL: 'postgresql://127.0.0.1:1/prueba', SQLITE_DB_PATH: dbPath };
+        delete process.env.TDD_BRANCHES_URL;
+        process.chdir(tmpDir);
+        const { main } = await import('../tddScript.js');
+        await main();
+        expect(process.exitCode).toBe(0);
+        const run = await local.getExecutionById(1);
+        expect(run.tests_passed).toBe(3);
+      } finally {
+        await local.close();
+        process.chdir(previousCwd);
+        process.env = previousEnv;
         process.exitCode = undefined;
-
-        try {
-          const mod = await import('../tddScript.js');
-          await mod.main();
-          expect(process.exitCode).toBe(0);
-        } finally {
-          fs.mkdirSync = originalMkdir;
-          process.chdir(originalCwd);
-          removeDir(mainTmpDir);
-          process.exitCode = undefined;
-        }
       }
-    );
+    });
 
     it(
       'debe ejecutar main y salir con codigo 0 cuando todo sale bien',
@@ -452,16 +449,9 @@ describe(
         try {
           const mod = await import('../tddScript.js');
 
-          // Hacer que initialize falle
-          const origInit = mod.TddStore.prototype.initialize;
-          mod.TddStore.prototype.initialize = jest.fn(() => {
-            throw new Error('DB init failed');
-          });
-
+          jest.spyOn(LocalTddStore.prototype, 'initialize').mockRejectedValue(new Error('DB init failed'));
           await mod.main();
           expect(process.exitCode).toBe(1);
-
-          mod.TddStore.prototype.initialize = origInit;
         } finally {
           process.chdir(originalCwd);
           removeDir(mainTmpDir);

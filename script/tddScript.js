@@ -3,7 +3,6 @@ import path from 'path';
 import { spawn } from 'cross-spawn';
 import { TddStore, nowIso } from './tddStore.js';
 import LocalTddStore from './localTddStore.js';
-import { useBranchApi } from './branch-api.js';
 import { captureGitContext } from './gitContext.js';
 
 const COMMAND = 'jest';
@@ -157,7 +156,7 @@ async function extractAndAddObject(reportFile, store) {
   };
 }
 
-async function main(store = useBranchApi() ? new LocalTddStore() : new TddStore(), run = extractAndAddObject) {
+async function main(store = new LocalTddStore(), run = extractAndAddObject) {
   const reportFile = path.join(
     process.cwd(),
     'script',
