@@ -1,10 +1,6 @@
 ﻿import fs from 'fs';
 import path from 'path';
 import Database from 'better-sqlite3';
-import { fileURLToPath } from 'url';
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 export function resolveLocalDbPath(dbPath = null) {
   if (dbPath) return path.resolve(dbPath);
