@@ -127,7 +127,8 @@ resultado de pruebas fallidas; un fallo de persistencia se informa mediante
 | Comando | Uso |
 |---|---|
 | `npm start` | Inicia el servidor de desarrollo de Parcel. |
-| `npm test` | Ejecuta las pruebas unitarias sin escribir en Neon. |
+| `npm test` | Ejecuta las pruebas de la aplicación, del ejecutor TDD y del envío de ramas. |
+| `npm run test:runner` | Comprueba cómo se registran las ejecuciones de Jest. |
 | `npm run test:unit` | Alias explícito de las pruebas unitarias. |
 | `npm run test:neon` | Comprueba la conexión y las tablas de Neon. |
 | `npm run test:neon:integration` | Ejecuta integración real contra Neon solo con `RUN_NEON_INTEGRATION=1`. |
