@@ -20,6 +20,8 @@ npm install
 
 ### Envío a la API de ramas
 
+Para reproducir la prueba con Git, SQLite y el backend, sigue la [guía de testing paso a paso](GUIA-TESTING-COMPLETO.md#prueba-de-principio-a-fin-con-la-api).
+
 En `.env` configura la dirección del backend:
 
 ```env

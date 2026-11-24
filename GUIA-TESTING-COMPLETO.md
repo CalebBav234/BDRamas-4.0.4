@@ -1,6 +1,6 @@
 ﻿# Guía de testing completo (BDRamas / TDD tracking)
 
-Esta guía describe, paso a paso, cómo verificar que todo el flujo funcione: pruebas de aplicación (`src`), base local SQLite, hooks de Git (pre-commit/post-commit/post-checkout/post-merge), inicialización de esquema, sincronización pre-push hacia PostgreSQL/Neon y controles de seguridad.
+Para probar la entrega del sprint, sigue las secciones 1 y 2 y continúa en [Prueba de principio a fin con la API](#prueba-de-principio-a-fin-con-la-api). Las secciones 3 a 5 explican cómo inspeccionar SQLite y los hooks por separado.
 
 > Entorno de referencia: Windows + PowerShell. Ajusta rutas/comandos si usas otro shell.
 
@@ -8,53 +8,42 @@ Esta guía describe, paso a paso, cómo verificar que todo el flujo funcione: pr
 
 ## 1. Prerrequisitos
 
-1. **Herramientas**
-   - Node.js y npm instalados.
-   - Git instalado y disponible en `PATH`.
-2. **Dependencias del proyecto**
-   - Ejecuta en la raíz del proyecto (`BDRamas-4.0.4`):
-     ```powershell
-     npm install
-     ```
-3. **Repositorio Git**
-   - Debes estar dentro de un repo Git con al menos un commit. Comprueba:
-     ```powershell
-     git rev-parse --is-inside-work-tree
-     git log --oneline -1
-     ```
-4. **Variables de entorno (seguridad)**
-   - Crea tu `.env` a partir de la plantilla **sin subirlo nunca**:
-     ```powershell
-     Copy-Item .env.example .env
-     ```
-   - Edita `.env` y configura:
-     - `DATABASE_URL`: cadena PostgreSQL (Neon) para sincronización remota / scripts remotos. Debe incluir base de datos y, en entornos no locales, `sslmode=require`.
-     - `REQUIRE_DB_SSL=1` (recomendado fuera de local) para exigir SSL.
-     - `SQLITE_DB_PATH` (opcional): ruta de la BD local; por defecto `.tddlab/tddlab.db`.
-   - **No** hagas commit de `.env`. Verifica:
-     ```powershell
-     git status --short
-     ```
-     `.env` no debe aparecer como archivo a versionar (está en `.gitignore`).
-   - Si alguna credencial se expuso, **rótala** en el proveedor.
+Abre PowerShell en una carpeta de trabajo. Comprueba que tienes Git, Node.js 20 y npm.
 
----
+```powershell
+git --version
+node --version
+npm --version
+```
 
-## 2. Verificar pruebas de aplicación (solo `src`)
+Clona la rama de Caleb que contiene la entrega. Si ya tienes este repositorio clonado, entra en su carpeta y usa `git switch feat/registrar-actividad-tdd-en-push` en lugar de volver a clonarlo.
 
-La configuración de Jest (`jest.config.js`) ejecuta únicamente tests bajo `src/`.
+```powershell
+git clone --branch feat/registrar-actividad-tdd-en-push https://github.com/CalebBav234/BDRamas-4.0.4.git
+cd BDRamas-4.0.4
+git branch --show-current
+npm ci
+git config --get core.hooksPath
+```
 
-1. **Listar tests detectados**
-   ```powershell
-   node ./node_modules/jest/bin/jest.js --listTests
-   ```
-   - Esperado: solo archivos dentro de `src` (p. ej. `src\sumador.test.js`). No deben listarse tests de `script/`.
+La rama debe ser `feat/registrar-actividad-tdd-en-push`. La instalación activa Husky y el último comando debe mostrar `.husky/_`.
 
-2. **Ejecutar tests unitarios de app**
+## 2. Ejecutar las pruebas y compilar
+
+1. **Ejecuta la suite habitual y genera la compilación.**
+
    ```powershell
    npm test
+   npm run build
    ```
-   - Esperado: suites/tests de `src` pasan (exit code 0).
+
+   En la entrega del sprint pasan 27 pruebas (1 de la aplicación, 17 del ejecutor TDD y 9 de ramas y envío). Parcel genera `dist/index.html`.
+
+2. **Para repetir únicamente la prueba de ramas y del POST**, ejecuta el siguiente comando. La suite crea su propio servidor HTTP y remoto Git temporales. Cubre el primer push, ambos tipos de merge y el reintento tras un HTTP 503. Puedes correrla incluso con la API del equipo apagada.
+
+   ```powershell
+   npm run test:branches
+   ```
 
 3. **(Opcional) Cobertura de app**
    ```powershell
@@ -77,11 +66,11 @@ La configuración de Jest (`jest.config.js`) ejecuta únicamente tests bajo `src
    Test-Path .\.tddlab\tddlab.db
    Get-ChildItem .\.tddlab -ErrorAction SilentlyContinue
    ```
-   - Esperado: `True` y el archivo `tddlab.db` presente. (`.tddlab/` está ignorado por Git).
+   - Esperado: `True` y el archivo `tddlab.db` presente. En esta rama el archivo predeterminado ya está versionado. La prueba de la API usa un archivo separado.
 
 3. **Inspeccionar tablas y datos (sin `sqlite3` CLI, usando Node + better-sqlite3)**
    ```powershell
-   node -e "const Database=require('better-sqlite3');const db=new Database('.tddlab/tddlab.db',{readonly:true});console.log(db.prepare(\"SELECT name FROM sqlite_master WHERE type='table' ORDER BY name\").all());db.close()"
+   node -e "const Database=require('better-sqlite3');const db=new Database('.tddlab/tddlab.db',{readonly:true});console.log(db.prepare('SELECT name FROM pragma_table_list ORDER BY name').all());db.close()"
    ```
    - Esperado: tablas como `tdd_branch`, `tdd_commit`, `tdd_merge`, `tdd_execution`, `tdd_schema_migration`.
 
@@ -147,7 +136,7 @@ Usa un repo/ramas locales de prueba.
 
 1. **Preparar base**
    ```powershell
-   git checkout -b test/merge-base
+   git checkout -b test/merge-local-base
    echo "base" > merge-test.txt; git add merge-test.txt; git commit -m "test: base merge"
    ```
 
@@ -155,8 +144,8 @@ Usa un repo/ramas locales de prueba.
    ```powershell
    git checkout -b test/merge-feature
    echo "feature" >> merge-test.txt; git add merge-test.txt; git commit -m "test: feature change"
-   git checkout test/merge-base
-   echo "mainline" >> merge-test.txt; git add merge-test.txt; git commit -m "test: mainline change"
+   git checkout test/merge-local-base
+   git commit --allow-empty -m "test: mainline change"
    git merge --no-ff test/merge-feature -m "test: merge no-ff"
    ```
    - Consulta:
@@ -167,9 +156,9 @@ Usa un repo/ramas locales de prueba.
 
 3. **Merge fast-forward**
    ```powershell
-   git checkout -b test/ff-feature test/merge-base
+   git checkout -b test/ff-feature test/merge-local-base
    echo "ff" > ff.txt; git add ff.txt; git commit -m "test: ff feature"
-   git checkout test/merge-base
+   git checkout test/merge-local-base
    git merge test/ff-feature
    ```
    - Repite la consulta de `tdd_merge`.
@@ -181,11 +170,70 @@ Usa un repo/ramas locales de prueba.
 
 ## 6. Verificar la sincronización pre-push
 
-En modo API, `npm run test:branches` comprueba el cuerpo enviado, los merges y el reintento cuando el servidor devuelve un error. Para probar con tu backend, configura `TDD_BRANCHES_URL`, haz un commit, ejecuta `npm run test:app` y sube la rama. El hook imprime los contadores que devuelve la API.
+### Prueba de principio a fin con la API
+
+Usa una misma ventana de PowerShell para los pasos 1 a 5. El último paso publica una rama de prueba en el remoto `origin` y necesita permiso de escritura. Para comprobar el flujo solo en local, basta con la sección 2.
+
+1. **Selecciona el endpoint y una base SQLite de prueba.** El backend de TDDLab debe estar en ejecución en la máquina de la URL, con PostgreSQL configurado. Si el equipo te da una dirección distinta, sustituye la URL en la primera línea.
+
+   ```powershell
+   $env:TDD_BRANCHES_URL = "http://localhost:3000/api/TDDCycles/branches/branches"
+   $env:SQLITE_DB_PATH = ".tddlab/prueba-api.db"
+   npm run db:init:local
+   ```
+
+2. **Prepara una rama de destino y otra de trabajo.** El sufijo evita reutilizar ramas de demostraciones anteriores.
+
+   ```powershell
+   $id = Get-Date -Format "yyyyMMdd-HHmmss"
+   $destino = "test/registro-api-$id"
+   $origen = "test/cambio-api-$id"
+   git switch -c $destino feat/registrar-actividad-tdd-en-push
+   git switch -c $origen
+   git commit --allow-empty -m "test: comprobar el registro de una ejecución"
+   $sha = git rev-parse HEAD
+   ```
+
+3. **Ejecuta Jest en ese commit y consulta su fila en SQLite.** El SHA impreso debe coincidir con `$sha`. Con el sumador de esta entrega se espera 1 prueba aprobada y 0 fallidas.
+
+   ```powershell
+   npm run test:app
+   $sha
+   node -e "const db=require('better-sqlite3')(process.env.SQLITE_DB_PATH,{readonly:true}); console.table(db.prepare('SELECT commit_sha, tests_total, tests_passed, tests_failed FROM tdd_execution WHERE commit_sha = ?').all(process.argv[1])); db.close()" $sha
+   ```
+
+4. **Crea el merge y verifica el registro local.** Deben aparecer las dos ramas de este ejercicio y `is_fast_forward` debe valer `0`.
+
+   ```powershell
+   git switch $destino
+   git merge --no-ff $origen -m "test: integrar la ejecución de prueba"
+   node -e "const db=require('better-sqlite3')(process.env.SQLITE_DB_PATH,{readonly:true}); console.table(db.prepare('SELECT source_branch, target_branch, merge_commit_sha, is_fast_forward FROM tdd_merge WHERE merge_commit_sha = ?').all(process.argv[1])); db.close()" (git rev-parse HEAD)
+   ```
+
+5. **Publica y comprueba la respuesta.**
+
+   ```powershell
+   git push -u origin $destino
+   git ls-remote --heads origin "refs/heads/$destino"
+   git rev-parse HEAD
+   ```
+
+   El hook envía un único `POST` JSON con `repository`, `branches`, `commits` y `merges`. Dentro de cada commit van `commitedAt` y `tddExecutions`. Para este ejemplo la API debería confirmar **2 ramas, 2 commits, 1 merge y 1 ejecución**. Busca la línea `[pre-push] API:` y comprueba que el SHA remoto coincide con `HEAD`. Para verificar la persistencia, consulta la base del backend con el SHA que guardaste en el paso 2.
+
+   ```sql
+   SELECT c.sha, e.tests_total, e.tests_passed, e.tests_failed
+   FROM tdd_commit AS c
+   JOIN tdd_execution AS e ON e.commit_sha = c.sha
+   WHERE c.sha = '<pega aquí el SHA del paso 2>';
+   ```
+
+**Reintento del push.** Si se rechaza la conexión, revisa la URL y que el backend esté escuchando. Con HTTP 500, revisa el error en la consola del servidor. En la revisión del 24/11/2026, el backend solicitaba `tdd_repository.created_at` y `tdd_commit.branchi_id`, incompatibles con el esquema publicado. Las claves de rama de `tdd_merge` también tenían tipos incompatibles. Una vez corregida la causa, repite `git push -u origin $destino` desde la misma terminal. La ejecución original sigue en SQLite. [Consultas del backend revisado](https://github.com/UCB-TallerSoft-2026-2/TDDLab/blob/ef9ad6f18c6a5954d82b912465c53ec76d69a7ab/server/src/modules/TDDCycles/Repositories/DBBranchRepository.ts) · [Esquema revisado](https://github.com/UCB-TallerSoft-2026-2/TDDLab/blob/ef9ad6f18c6a5954d82b912465c53ec76d69a7ab/ModeloDatos/database/schema.sql)
+
+Al terminar, vuelve a la rama de la entrega con `git switch feat/registrar-actividad-tdd-en-push`. Cerrar la ventana de PowerShell descarta las variables de esta sesión.
 
 ### Sincronización directa con PostgreSQL/Neon
 
-Los pasos siguientes corresponden a una configuración con solo `DATABASE_URL`.
+Para probar este modo alternativo, abre otra sesión y configura solo `DATABASE_URL` con la conexión de tu base PostgreSQL de pruebas. Si usas `.env`, deja `TDD_BRANCHES_URL` sin definir. El comando `npm run db:sync` utiliza la sincronización directa con PostgreSQL.
 
 El hook `.husky/pre-push` ejecuta `script/pre-push-sync.js`, que:
 - lee refs desde stdin del push,
@@ -263,7 +311,7 @@ $env:SKIP_DB_SYNC = "1"; git push; Remove-Item Env:SKIP_DB_SYNC
 - [ ] `.env.example` no contiene secretos reales.
 - [ ] `DATABASE_URL` usa `sslmode=require` (o SSL equivalente) fuera de local; `REQUIRE_DB_SSL=1` en entornos estrictos.
 - [ ] Errores de BD no exponen credenciales (mensajes enmascarados por `db-security`).
-- [ ] `.tddlab/` y `*.db*` permanecen ignorados por Git.
+- [ ] La base de la demostración `.tddlab/prueba-api.db` queda fuera del commit.
 - [ ] Hooks pueden omitirse solo con `HUSKY_SKIP_TRACK=1` / `SKIP_DB_SYNC=1` de forma consciente.
 
 ---
@@ -272,21 +320,21 @@ $env:SKIP_DB_SYNC = "1"; git push; Remove-Item Env:SKIP_DB_SYNC
 
 | Síntoma | Causa probable | Acción |
 |---|---|---|
-| `npm test` ejecuta tests de `script/` | Jest no usa `jest.config.js` | Verifica que `jest.config.js` exista en raíz y que `package.json` no tenga sección `jest` conflictiva |
+| Solo quiero repetir las pruebas del ejecutor TDD | `npm test` incluye tres grupos de pruebas | Ejecuta `npm run test:runner` |
 | Error de parseo JSON/BOM en `package.json` | Archivo con BOM | Re-guardar `package.json` como UTF-8 sin BOM |
 | `DATABASE_URL no está configurada` | Falta `.env` o variable | Crear `.env` desde `.env.example` y definir `DATABASE_URL` |
 | `DATABASE_URL debe usar SSL...` | `sslmode` ausente/disable con `REQUIRE_DB_SSL=1` | Añadir `sslmode=require` o ajustar flags solo en local controlado |
 | Pre-push aborta | Sync remoto falla o URL inválida | Revisar conectividad/credenciales/SSL; usar `SKIP_DB_SYNC=1` solo si aceptas no sincronizar |
 | No aparecen datos en SQLite | Hook omitido o commit fuera de repo | Verificar `HUSKY_SKIP_TRACK`, estar en repo Git y repetir operación |
-| No aparecen datos en remoto | No se ejecutó pre-push/sync o no había commits en rango | Ejecutar `db:sync` (con refs) o hacer push; revisar logs `[pre-push-sync]` |
+| Faltan datos en el backend HTTP | La API devolvió un error o el push ya estaba al día | Comprueba la URL, busca la línea `[pre-push] API:` y contrasta los contadores con el SHA en la base del backend |
 | `better-sqlite3` falla al instalar/cargar | Binario nativo incompatible | Reinstalar dependencias (`npm ci`/`npm install`) con toolchain compatible en Windows |
 
 ---
 
 ## 10. Resultado esperado (resumen)
 
-- `npm test`: pasa y solo ejecuta `src/**/*.test.js`.
+- `npm test` ejecuta la aplicación, el ejecutor TDD y las pruebas de ramas y envío.
 - `npm run db:init:local`: crea/actualiza `.tddlab/tddlab.db` con el esquema requerido.
 - Commits/checkouts/merges (incl. fast-forward) en ramas de prueba: generan/actualizan registros en SQLite (`tdd_branch`, `tdd_commit`, `tdd_merge`).
 - Pre-push: con `DATABASE_URL` válida, sincroniza solo los datos necesarios de la rama a PostgreSQL y permite el push; con fallo, bloquea el push.
-- `.env` y `.tddlab/*` no se versionan; credenciales no se exponen en logs.
+- El archivo `.env` y la base SQLite de la demostración quedan fuera del commit.
