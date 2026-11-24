@@ -9,7 +9,6 @@ export async function collectBranchPush(localStore, stdinText, remote = 'origin'
     return null;
   }
 
-  const repository = repositoryFromRemote(getRemoteUrl({ remote, cwd }) || remote);
   const branchesBySha = new Map();
   for (const ref of updates) {
     const name = ref.remoteRef.slice('refs/heads/'.length);
@@ -20,9 +19,27 @@ export async function collectBranchPush(localStore, stdinText, remote = 'origin'
     }
   }
 
+  return buildBranchPush(localStore, remote, cwd, updates, branchesBySha);
+}
+
+async function buildBranchPush(localStore, remote, cwd, updates, branchesBySha) {
+  const repository = repositoryFromRemote(getRemoteUrl({ remote, cwd }) || remote);
   const rows = await collectSyncPayload(localStore, [...branchesBySha.keys()]);
-  const commits = commitsForApi(repository.slug, rows, branchesBySha, cwd);
   const merges = mergesForApi(repository.slug, rows.merges, branchesBySha);
+  // Un merge puede integrar un SHA ya publicado en Git pero ausente de la API.
+  const sources = new Map();
+  for (const merge of merges) {
+    if (!branchesBySha.has(merge.sourceCommitSha)) {
+      sources.set(merge.sourceCommitSha, merge.sourceBranch);
+    }
+  }
+  if (sources.size) {
+    const shas = [...sources.keys()];
+    rows.commits.push(...await localStore.getCommitsByShas(shas));
+    rows.executions.push(...await localStore.getExecutionsByCommitShas(shas));
+    for (const [sha, branch] of sources) branchesBySha.set(sha, branch);
+  }
+  const commits = commitsForApi(repository.slug, rows, branchesBySha, cwd);
   const observed = new Map();
   function observe(name, date) {
     if (!observed.has(name) || date < observed.get(name)) {

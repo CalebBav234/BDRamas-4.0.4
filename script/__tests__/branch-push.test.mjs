@@ -151,3 +151,26 @@ test('arma el cuerpo con Git y SQLite al subir una rama distinta a la activa', a
   assert.equal(await collectBranchPush(store, '', 'equipo', cwd), null);
   assert.equal(await collectBranchPush(store, `(delete) ${zeroSha} refs/heads/division ${sha}`, 'equipo', cwd), null);
 });
+
+test('incluye el origen de un merge aunque el commit ya exista en el remoto Git', async t => {
+  const { cwd, git, commit } = createRepo(t);
+  git('remote', 'add', 'origin', 'https://github.com/equipo/base.git');
+  const base = commit('base');
+  git('switch', '--quiet', '-c', 'suma');
+  const source = commit('sumar');
+  git('update-ref', 'refs/remotes/origin/suma', source);
+  git('switch', '--quiet', 'main');
+  git('merge', '--no-ff', 'suma', '-m', 'integrar suma');
+  const merge = git('rev-parse', 'HEAD');
+  const store = new LocalTddStore({ dbPath: path.join(cwd, 'registro.db') });
+  t.after(() => store.close());
+  await store.recordMerge({ sourceBranch: 'suma', targetBranch: 'main', sourceCommitSha: source,
+    mergeCommitSha: merge, isFastForward: false });
+  await store.insertExecution({ commitSha: source, testsTotal: 1, testsPassed: 1, testsFailed: 0 });
+  const ref = `refs/heads/main ${merge} refs/heads/main ${zeroSha}`;
+  const body = await collectBranchPush(store, ref, 'origin', cwd);
+  assert.deepEqual(body.commits.map(c => c.commitSha).sort(), [merge, source].sort());
+  assert.equal(body.commits.find(c => c.commitSha === source).tddExecutions.length, 1);
+  assert.equal(body.merges[0].sourceCommitSha, source);
+  assert.equal(body.commits.some(c => c.commitSha === base), false);
+});
