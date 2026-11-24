@@ -1,44 +1,30 @@
-﻿# Guía de testing completo (BDRamas / TDD tracking)
+# Guía de testing completo (BDRamas / Neon)
 
-Si ya tienes BDRamas y TDDLab en la laptop de Caleb, sigue [Actualizar y reenviar el commit de Caleb](#actualizar-y-reenviar-el-commit-de-caleb). Para instalar desde cero, empieza por la sección 1.
+Las ejecuciones de Jest se escriben en Neon al terminar la prueba. El hook
+`pre-push` guarda en Neon los repositorios, ramas, commits y merges publicados.
+SQLite conserva una copia local de la actividad.
 
-## Actualizar y reenviar el commit de Caleb
+## Configurar Neon
 
-El primer push de `0557321` llegó a GitHub con `--no-verify`. Estos pasos recuperan ese commit para la API y dejan preparado el envío automático en los próximos pushes. Usa PowerShell y los dos directorios que aparecen en el registro de la laptop.
+1. Copia a `.env` la cadena PostgreSQL de Neon como `DATABASE_URL`, conservando
+   `sslmode=require`. No configures `TDD_BRANCHES_URL` si quieres escritura
+   directa en Neon.
+2. Instala dependencias y verifica la conexión y las tablas:
 
-**1. Actualiza el proyecto base.** Detén el servidor abierto con `Ctrl+C`. En una terminal ejecuta los siguientes comandos y continúa si cada uno termina correctamente.
+   ```powershell
+   npm ci
+   npm run test:neon
+   ```
 
-```powershell
-cd "$HOME\Downloads\BDRamas\BDRamas-4.0.4"
-git switch feat/registrar-actividad-tdd-en-push
-git pull --ff-only origin feat/registrar-actividad-tdd-en-push
-npm.cmd ci
-```
+3. Si necesitas enviar un commit ya existente, ejecuta
+   `npm run db:sync -- --commit <SHA>`. Para los pushes normales, el hook se
+   ejecuta automáticamente.
 
-**2. Prepara el servidor del equipo.** La corrección incluida en esta rama se probó con TDDLab `6d990021`. El primer comando comprueba los parches y los aplica en la copia local del servidor. Se puede repetir. Si Git informa de un conflicto, detente y revisa los cambios locales del servidor.
+El esquema debe estar creado en `public` de acuerdo con la definición de Neon
+del proyecto. `npm run db:init:remote` valida las columnas requeridas; no
+modifica ni recrea la base.
 
-```powershell
-npm.cmd run api:preparar -- "$HOME\Downloads\tallerSoft\TDDLab"
-cd "$HOME\Downloads\tallerSoft\TDDLab\server"
-npm.cmd run db:migrar-ramas
-npm.cmd run dev
-```
-
-Usa la configuración PostgreSQL **de desarrollo** de TDDLab (`PGHOST`, `PGPORT`, `PGDATABASE`, `PGUSER`, `PGPASSWORD` en el entorno del servidor o su archivo `.env`). Si es la primera instalación del servidor, ejecuta `npm.cmd ci` en `TDDLab\server` antes de la migración. La migración requiere permiso para crear y modificar las tablas TDD. Prepara una base vacía o actualiza el modelo UUID de TDDLab en una transacción. Si falla, revisa el error antes de iniciar el servidor. El proyecto base envía la actividad por HTTP.
-
-**3. Reenvía el commit.** Mantén abierta la terminal que muestra `Server is running on port: 3000` y abre una segunda terminal.
-
-```powershell
-cd "$HOME\Downloads\BDRamas\BDRamas-4.0.4"
-$env:TDD_BRANCHES_URL = "http://localhost:3000/api/TDDCycles/branches/branches"
-npm.cmd run db:sync -- --commit 0557321
-```
-
-Busca `[pre-push] API:` y los cuatro contadores. En una base limpia se registra un commit con el mensaje `testing:pruebita`. Si no había ejecuciones de Jest guardadas para ese SHA, el contador de ejecuciones es cero. Puedes repetir el comando para comprobar que los contadores nuevos quedan en cero. Para probar el commit actualmente seleccionado y enviar su resultado, ejecuta `npm.cmd run test:app` y después `npm.cmd run db:sync`. En futuros commits basta con un `git push` normal para activar el envío.
-
-Los dos parches y su aplicador se distribuyen desde BDRamas. [Esquema](docs/servidor-tddlab/01-esquema.patch) · [Guardado del lote](docs/servidor-tddlab/02-registro.patch)
-
-> Entorno de referencia: Windows + PowerShell. Ajusta rutas/comandos si usas otro shell.
+> Entorno de referencia: Windows + PowerShell. Ajusta comandos si usas otro shell.
 
 ---
 
@@ -204,84 +190,46 @@ Usa un repo/ramas locales de prueba.
 
 ---
 
-## 6. Verificar la sincronización pre-push
+## 6. Verificar la sincronización con Neon
 
-### Prueba de principio a fin con la API
-
-Usa una misma ventana de PowerShell para los pasos 1 a 5. El último paso publica una rama de prueba en el remoto `origin` y necesita permiso de escritura. Para comprobar el flujo solo en local, basta con la sección 2.
-
-1. **Selecciona el endpoint y una base SQLite de prueba.** El backend de TDDLab debe estar en ejecución en la máquina de la URL, con PostgreSQL configurado. Si el equipo te da una dirección distinta, sustituye la URL en la primera línea.
+1. Verifica la conexión y confirma que `.env` contiene `DATABASE_URL`:
 
    ```powershell
-   $env:TDD_BRANCHES_URL = "http://localhost:3000/api/TDDCycles/branches/branches"
-   $env:SQLITE_DB_PATH = ".tddlab/prueba-api.db"
-   npm run db:init:local
+   npm run test:neon
    ```
 
-2. **Prepara una rama de destino y otra de trabajo.** El sufijo evita reutilizar ramas de demostraciones anteriores.
-
-   ```powershell
-   $id = Get-Date -Format "yyyyMMdd-HHmmss"
-   $destino = "test/registro-api-$id"
-   $origen = "test/cambio-api-$id"
-   git switch -c $destino feat/registrar-actividad-tdd-en-push
-   git switch -c $origen
-   git commit --allow-empty -m "test: comprobar el registro de una ejecución"
-   $sha = git rev-parse HEAD
-   ```
-
-3. **Ejecuta Jest en ese commit y consulta su fila en SQLite.** El SHA impreso debe coincidir con `$sha`. Con el sumador de esta entrega se espera 1 prueba aprobada y 0 fallidas.
+2. Ejecuta las pruebas. La ejecución se inserta en Neon y queda asociada al SHA
+   de `HEAD` cuando se ejecuta dentro de un repositorio Git:
 
    ```powershell
    npm run test:app
-   $sha
-   node -e "const db=require('better-sqlite3')(process.env.SQLITE_DB_PATH,{readonly:true}); console.table(db.prepare('SELECT commit_sha, tests_total, tests_passed, tests_failed FROM tdd_execution WHERE commit_sha = ?').all(process.argv[1])); db.close()" $sha
-   ```
-
-4. **Crea el merge y verifica el registro local.** Deben aparecer las dos ramas de este ejercicio y `is_fast_forward` debe valer `0`.
-
-   ```powershell
-   git switch $destino
-   git merge --no-ff $origen -m "test: integrar la ejecución de prueba"
-   node -e "const db=require('better-sqlite3')(process.env.SQLITE_DB_PATH,{readonly:true}); console.table(db.prepare('SELECT source_branch, target_branch, merge_commit_sha, is_fast_forward FROM tdd_merge WHERE merge_commit_sha = ?').all(process.argv[1])); db.close()" (git rev-parse HEAD)
-   ```
-
-5. **Publica y comprueba la respuesta.**
-
-   ```powershell
-   git push -u origin $destino
-   git ls-remote --heads origin "refs/heads/$destino"
    git rev-parse HEAD
    ```
 
-   El hook envía un único `POST` JSON con `repository`, `branches`, `commits` y `merges`. Dentro de cada commit van `commitedAt` y `tddExecutions`. Con la base preparada y las dos ramas nuevas, el recibo debe incluir **2 ramas, 2 commits, 1 merge y 1 ejecución**. Si ya se habían recibido datos, los contadores reflejan solo los registros nuevos. Busca la línea `[pre-push] API:` y comprueba que el SHA remoto coincide con `HEAD`. Para verificar la persistencia, consulta la base del backend con el SHA que guardaste en el paso 2.
+3. Haz un push normal. Si la escritura en Neon falla, el hook aborta el push;
+   corrige la conexión y vuelve a intentarlo:
 
-   ```sql
-   SELECT c.sha, e.tests_total, e.tests_passed, e.tests_failed
-   FROM tdd_commit AS c
-   JOIN tdd_execution AS e ON e.commit_sha = c.sha
-   JOIN tdd_repository AS r ON r.id = e.repo_id
-   WHERE r.owner = 'CalebBav234' AND r.repos_name = 'BDRamas-4.0.4'
-     AND c.sha = '<pega aquí el SHA del paso 2>';
+   ```powershell
+   git push
    ```
 
-**Reintento del push.** Si se rechaza la conexión, comprueba la URL y que el servidor esté escuchando. Si responde con HTTP 500, revisa el error en la consola de TDDLab y que hayas aplicado la corrección y ejecutado la migración de esta guía. Después repite `git push -u origin $destino`. Si el commit ya está en GitHub, usa `npm.cmd run db:sync -- --commit <SHA>`. La API corregida devuelve el número de registros nuevos. Una repetición completa devuelve cero en los cuatro contadores.
+4. Comprueba los datos desde el SQL Editor de Neon:
 
-Al terminar, vuelve a la rama de la entrega con `git switch feat/registrar-actividad-tdd-en-push`. Cerrar la ventana de PowerShell descarta las variables de esta sesión.
+   ```sql
+   SELECT e.id, e.executed_at, e.tests_total, e.tests_passed, e.tests_failed,
+          c.sha, c.message, b.name AS branch, r.owner, r.repos_name
+   FROM public.tdd_execution AS e
+   LEFT JOIN public.tdd_commit AS c ON c.sha = e.commit_sha
+   LEFT JOIN public.tdd_branch AS b ON b.id = c.branch_id
+   LEFT JOIN public.tdd_repository AS r ON r.id = b.repo_id
+   ORDER BY e.id DESC
+   LIMIT 20;
+   ```
 
-## 7. Enviar al endpoint desde la terminal
-
-Con el backend en ejecución, puedes enviar la actividad de la rama activa sin publicar una referencia en GitHub. Desde la raíz de BDRamas, ejecuta en PowerShell:
-
-```powershell
-$env:TDD_BRANCHES_URL = "http://localhost:3000/api/TDDCycles/branches/branches"
-npm.cmd run test:app
-npm.cmd run db:sync
-```
-
-El primer comando de npm guarda el resultado en SQLite junto al SHA actual. El segundo prepara el JSON para el remoto `origin` y lo envía mediante `fetch` con método `POST`. Incluye los commits nuevos respecto a las referencias locales de ese remoto, o el último commit cuando ya están publicados. También puedes usar el envío automático del paso 5 de la sección 6. Cada envío manual genera una petición nueva.
-
-La URL local del ejemplo es el valor predeterminado. Para usar un backend compartido, configura la URL que indique el equipo. El cliente solo necesita acceso HTTP al backend.
+Las ejecuciones se envían al correr Jest; el push guarda el repositorio, las
+ramas, los commits y los merges. Reintentar el push no vuelve a insertar la
+ejecución. Si el envío de una prueba falla, la copia local se conserva y se
+puede reintentar ejecutando de nuevo `npm run test:app`.
 
 ---
 
@@ -300,9 +248,9 @@ La URL local del ejemplo es el valor predeterminado. Para usar un backend compar
 |---|---|---|
 | Solo quiero repetir las pruebas del ejecutor TDD | `npm test` incluye tres grupos de pruebas | Ejecuta `npm run test:runner` |
 | Error de parseo JSON/BOM en `package.json` | Archivo con BOM | Re-guardar `package.json` como UTF-8 sin BOM |
-| Pre-push aborta | El endpoint está inaccesible o ha rechazado los datos | Comprueba la URL, revisa el estado HTTP y reintenta cuando el backend esté disponible |
+| Pre-push aborta | Neon está inaccesible o rechazó los datos | Comprueba `DATABASE_URL` y repite `git push` |
 | No aparecen datos en SQLite | Hook omitido o commit fuera de repo | Verificar `HUSKY_SKIP_TRACK`, estar en repo Git y repetir operación |
-| Faltan datos en el backend HTTP | La API devolvió un error o el push ya estaba al día | Comprueba la URL, busca la línea `[pre-push] API:` y contrasta los contadores con el SHA en la base del backend |
+| No aparecen ejecuciones en Neon | Falta `DATABASE_URL` o falló la conexión durante Jest | Revisa el error y vuelve a ejecutar `npm run test:app` |
 | `better-sqlite3` falla al instalar/cargar | Binario nativo incompatible | Reinstalar dependencias (`npm ci`/`npm install`) con toolchain compatible en Windows |
 
 ---
@@ -312,5 +260,5 @@ La URL local del ejemplo es el valor predeterminado. Para usar un backend compar
 - `npm test` ejecuta la aplicación, el ejecutor TDD y las pruebas de ramas y envío.
 - `npm run db:init:local`: crea/actualiza `.tddlab/tddlab.db` con el esquema requerido.
 - Commits/checkouts/merges (incl. fast-forward) en ramas de prueba: generan/actualizan registros en SQLite (`tdd_branch`, `tdd_commit`, `tdd_merge`).
-- El hook envía la actividad al endpoint y comprueba la confirmación del servidor antes de publicar la rama.
+- El hook guarda commits y merges en Neon antes de publicar la rama.
 - El archivo `.env` y la base SQLite de la demostración quedan fuera del commit.

@@ -1,8 +1,9 @@
 # BDRamas
 
 Aplicación de demostración para ejecutar pruebas TDD y registrar su relación con
-ramas, commits y merges de Git. Los hooks registran la actividad en SQLite.
-El hook pre-push envía la actividad con un POST a la API de ramas. El backend se encarga de la persistencia remota.
+ramas, commits y merges de Git. SQLite conserva una copia local; las ejecuciones
+de pruebas se guardan en Neon al ejecutarlas y los commits/ramas/merges se
+guardan al hacer `git push`.
 
 ## Inicio rápido
 
@@ -10,7 +11,7 @@ El hook pre-push envía la actividad con un POST a la API de ramas. El backend s
 
 - Node.js 20 y npm.
 - Git disponible en el `PATH`.
-- La API de ramas en ejecución para registrar la actividad por HTTP.
+- Una base PostgreSQL de Neon y su URL de conexión.
 
 ### Instalación
 
@@ -18,54 +19,40 @@ El hook pre-push envía la actividad con un POST a la API de ramas. El backend s
 npm install
 ```
 
-### Envío a la API de ramas
+### Configurar Neon
 
-Para reproducir la prueba con Git, SQLite y el backend, sigue la [guía de testing paso a paso](GUIA-TESTING-COMPLETO.md#prueba-de-principio-a-fin-con-la-api).
-
-En `.env` configura la dirección del backend:
-
-```env
-TDD_BRANCHES_URL=http://localhost:3000/api/TDDCycles/branches/branches
-```
-
-1. Haz el commit que quieres probar.
-2. Ejecuta `npm run test:app` para guardar en SQLite el resultado asociado al SHA actual.
-3. Ejecuta `git push`. El hook envía un solo JSON con el repositorio, las ramas, los commits con sus ejecuciones y los merges. Al confirmar la API, muestra los cuatro contadores.
-4. Si la API está apagada o responde con un error, vuelve a levantarla y repite el push. Los datos se conservan en SQLite.
-
-La URL del ejemplo es el destino predeterminado. Para enviar desde la terminal, ejecuta `npm run db:sync` en la rama activa. `npm run test:branches` prueba el envío con un servidor HTTP temporal y un remoto Git de prueba.
-
-### Configuración opcional para las pruebas específicas de Neon
-
-1. En el panel de Neon, copia la cadena de conexión PostgreSQL.
-2. Crea un archivo `.env` en la raíz del proyecto:
+En `.env` configura la conexión a Neon:
 
 ```env
 DATABASE_URL=postgresql://usuario:contraseña@host/base_de_datos?sslmode=require
 ```
 
-3. No subas `.env` al repositorio. Está incluido en `.gitignore`.
-4. Comprueba la conexión:
+1. Copia la cadena de conexión desde Neon y conserva `sslmode=require`.
+2. No subas `.env` al repositorio. Está incluido en `.gitignore`.
+3. Valida la conexión y las tablas:
 
 ```powershell
 npm run test:neon
 ```
 
-La aplicación crea automáticamente las tablas e índices TDD cuando se ejecuta
-`TddStore.initialize()`. No es necesario ejecutar un script SQL manual para la
-instalación inicial.
+La base debe tener las tablas del esquema TDD proporcionado. El comando
+`npm run db:init:remote` valida el esquema; no altera ni recrea las tablas.
+`npm run test:app` guarda la ejecución en SQLite y en Neon. `git push` registra
+en Neon el repositorio, las ramas, los commits y los merges. Si el guardado
+remoto falla, el comando informa el error y conserva la copia local.
 
 ## Arquitectura
 
 El flujo principal está dividido en estas responsabilidades:
 
-- [`script/tddStore.js`](script/tddStore.js): capa de persistencia. Crea el
-  esquema, abre el `Pool` de PostgreSQL y expone operaciones asíncronas para
-  ramas, commits, merges y ejecuciones.
+- [`script/neonActivityStore.js`](script/neonActivityStore.js): valida el
+  esquema compartido de Neon y guarda ejecuciones, ramas, commits y merges en
+  transacciones.
 - [`script/TDDLogBDAdapter.js`](script/TDDLogBDAdapter.js): nombre de adaptador
   compatible que reutiliza `TddStore` sin duplicar la lógica de persistencia.
 - [`script/tddScript.js`](script/tddScript.js): ejecuta Jest, lee
-  `script/report.json`, obtiene el contexto Git y guarda la ejecución en SQLite.
+  `script/report.json`, obtiene el contexto Git y guarda la ejecución en SQLite
+  y Neon.
 - [`script/commitScript.js`](script/commitScript.js): registra el commit actual
   y su rama.
 - [`script/commit-tracker.js`](script/commit-tracker.js): registra commits desde
@@ -88,31 +75,37 @@ operaciones de base de datos deben tratarse como asíncronas con `await`.
 
 ## Modelo de datos
 
-`TddStore` crea estas tablas en el esquema `public`:
+El registro en Neon utiliza estas tablas del esquema `public`:
 
 | Tabla | Propósito |
 |---|---|
-| `tdd_schema_migration` | Registra la versión del esquema inicializada. |
-| `tdd_branch` | Ramas observadas y su commit de origen. |
-| `tdd_commit` | Commits, padres, rama, autor, mensaje y fecha. |
+| `tdd_repository` | Repositorios por propietario, nombre y URL. |
+| `tdd_branch` | Ramas relacionadas con el repositorio y su commit de origen. |
+| `tdd_commit` | Commits, padre, rama, autor, mensaje y fecha. |
 | `tdd_merge` | Relaciones de merge entre ramas y commits. |
 | `tdd_execution` | Resultado de cada ejecución de pruebas. |
+| `tdd_schema_migration` | Versionado auxiliar del esquema. |
 
-Las claves principales y las restricciones `ON CONFLICT` hacen que guardar de
-nuevo el mismo commit o rama actualice sus metadatos en lugar de duplicarlos.
-Cada ejecución se inserta como un registro nuevo.
+Los commits se actualizan por SHA; las ramas se buscan por repositorio y nombre
+antes de insertarlas. Cada ejecución se inserta como un registro nuevo. El
+esquema suministrado usa columnas `date` para algunas fechas, por lo que Neon
+conserva el día pero no la hora exacta de ejecuciones, ramas y merges.
 
 ### Flujo de una ejecución real
 
 `npm run test:app` realiza este flujo:
 
 1. Carga la configuración desde `.env`.
-2. Inicializa SQLite para conservar la ejecución hasta el envío.
+2. Inicializa SQLite para conservar una copia local.
 3. Ejecuta Jest con salida JSON en `script/report.json`.
 4. Obtiene rama, commit, padres y estado del árbol mediante Git.
 5. Guarda el commit y la rama, si existen.
-6. Guarda los totales de pruebas y el código de salida en `tdd_execution`.
-7. Cierra la conexión.
+6. Guarda los totales de pruebas localmente y los envía a `public.tdd_execution`
+   en Neon.
+7. Cierra las conexiones.
+
+El hook `pre-push` registra ramas, commits y merges. No vuelve a insertar las
+ejecuciones que ya se guardaron al correr las pruebas.
 
 Los hooks `post-checkout`, `post-commit` y `post-merge` registran,
 respectivamente, la rama activa, el commit y los merges. Para
@@ -134,8 +127,8 @@ resultado de pruebas fallidas; un fallo de persistencia se informa mediante
 | `npm run test:unit` | Alias explícito de las pruebas unitarias. |
 | `npm run test:neon` | Comprueba la conexión y las tablas de Neon. |
 | `npm run test:neon:integration` | Ejecuta integración real contra Neon solo con `RUN_NEON_INTEGRATION=1`. |
-| `npm run test:app` | Ejecuta Jest y guarda el resultado en SQLite. |
-| `npm run db:sync` | Envía la actividad por HTTP al endpoint de ramas. |
+| `npm run test:app` | Ejecuta Jest y guarda el resultado localmente y en Neon. |
+| `npm run db:sync` | Envía ramas, commits y merges a Neon. |
 | `npm run test:integration` | Ejecuta la comprobación real de Neon. |
 | `npm run test:e2e` | Ejecuta el flujo real de la aplicación. |
 | `npm run test:smoke` | Ejecuta la suite rápida de smoke tests. |
@@ -191,10 +184,14 @@ SELECT
   e.tests_passed,
   e.tests_failed,
   e.commit_sha,
-  c.branch,
+  b.name AS branch,
+  r.owner,
+  r.repos_name,
   c.message
 FROM tdd_execution AS e
 LEFT JOIN tdd_commit AS c ON c.sha = e.commit_sha
+LEFT JOIN tdd_branch AS b ON b.id = c.branch_id
+LEFT JOIN tdd_repository AS r ON r.id = b.repo_id
 ORDER BY e.executed_at DESC;
 ```
 
@@ -202,14 +199,14 @@ ORDER BY e.executed_at DESC;
 
 ### Añadir una operación de persistencia
 
-1. Añade el método asíncrono en `TddStore`.
+1. Añade el método asíncrono en `NeonActivityStore`.
 2. Llama a `await this.initialize()` al inicio del método.
 3. Usa consultas parametrizadas (`$1`, `$2`, etc.); no interpolar valores
    directamente en SQL.
-4. Actualiza el esquema constante `SCHEMA` solo si la estructura realmente
-   cambia.
-5. Prueba el método con `makePool()` y añade una prueba de integración solo
-   cuando sea necesario validar PostgreSQL real.
+4. Mantén las consultas alineadas con el esquema compartido de Neon; la
+    inicialización valida las tablas y no las recrea.
+5. Prueba el método con un pool simulado y añade una prueba de integración solo
+    cuando sea necesario validar PostgreSQL real.
 6. Asegúrate de cerrar el store en `afterEach` o `finally`.
 
 ### Añadir o modificar el flujo de pruebas
@@ -224,11 +221,11 @@ ORDER BY e.executed_at DESC;
 
 ### Cierre del pool
 
-`TddStore.close()` es idempotente. Aun así, el código que crea un store debe
+`NeonActivityStore.close()` es idempotente. Aun así, el código que crea un store debe
 cerrarlo en un bloque `finally` para evitar conexiones abiertas:
 
 ```js
-const store = new TddStore();
+const store = new NeonActivityStore();
 
 try {
   await store.initialize();
@@ -240,7 +237,7 @@ try {
 
 ## Solución de problemas
 
-### Configuración de las pruebas opcionales de Neon
+### Configuración de Neon
 
 Verifica que `.env` esté en la raíz del proyecto y que la variable se llame
 exactamente `DATABASE_URL`. No incluyas espacios alrededor del signo `=`.
@@ -250,16 +247,17 @@ exactamente `DATABASE_URL`. No incluyas espacios alrededor del signo `=`.
 Usa la cadena proporcionada por Neon y conserva `sslmode=require` si aparece en
 ella. Comprueba también que el endpoint de Neon esté activo.
 
-### `npm test` intenta escribir en Neon
+### Las pruebas unitarias intentan escribir en Neon
 
-La suite unitaria usa `MockPool`. Revisa que la prueba no cree
-`new TddStore()` sin un pool simulado; utiliza `new TddStore({ pool:
-makePool() })`.
+La suite unitaria usa `MockPool`; solo `npm run test:app` y `git push` escriben
+en Neon.
 
 ### No aparecen datos nuevos
 
-`npm test` no escribe en la nube. Ejecuta `npm run test:app` y luego consulta
-`tdd_execution` en SQLite. Ejecuta `npm run db:sync` para enviarla a la API.
+Confirma que `.env` contiene `DATABASE_URL` y que no define
+`TDD_BRANCHES_URL` (esa variable activa el transporte HTTP heredado solo si no
+hay `DATABASE_URL`). Las ejecuciones aparecen en `tdd_execution` al correr
+pruebas; los commits y merges aparecen al completar `git push`.
 
 ### Mensajes `fatal:` de Git
 
@@ -284,5 +282,4 @@ Si el cambio modifica la conexión o el esquema, añade también:
 npm run test:neon
 ```
 
-No ejecutes `npm run test:app` automáticamente en CI o durante una prueba
-unitaria: ese comando escribe datos en SQLite.
+`npm run test:app` y `git push` escriben datos en Neon; las pruebas unitarias no.
