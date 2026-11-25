@@ -39,27 +39,8 @@ const readJSONFile = (filePath) => {
   return JSON.parse(rawData);
 };
 
-async function extractAndAddObject(reportFile, store) {
-  const startTime = nowIso();
-
-  let childResult;
-  let jestError = null;
-
-  try {
-    childResult = await runCommand(COMMAND, args);
-  } catch (error) {
-    jestError = error;
-    childResult = { code: null };
-  }
-
+async function readAndSaveExecution(reportFile, store) {
   const endTime = nowIso();
-
-  const exitCode =
-    childResult && typeof childResult.code === 'number'
-      ? childResult.code
-      : 1;
-
-  const success = exitCode === 0;
 
   let report = null;
 
@@ -67,17 +48,7 @@ async function extractAndAddObject(reportFile, store) {
     if (fs.existsSync(reportFile)) {
       report = readJSONFile(reportFile);
     }
-  } catch (readError) {
-    jestError = jestError || readError;
-  }
-
-  const hasReportTiming =
-    report &&
-    Number.isFinite(report.startTime) &&
-    Number.isFinite(report.endTime);
-  const durationMs = hasReportTiming
-    ? report.endTime - report.startTime
-    : Date.parse(endTime) - Date.parse(startTime);
+  } catch {}
 
   const testsPassed = report ? report.numPassedTests : 0;
   const testsFailed = report ? report.numFailedTests : 0;
@@ -87,7 +58,7 @@ async function extractAndAddObject(reportFile, store) {
 
   try {
     gitContext = captureGitContext();
-  } catch (error) {
+  } catch {
     gitContext = {
       repoRoot: null,
       headSha: null,
@@ -139,9 +110,9 @@ async function extractAndAddObject(reportFile, store) {
       executedAt: endTime
     });
 
-  console.log(
-    `[TDD Logging] Ejecución guardada: executionId=${executionId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, testsPassed=${testsPassed}, testsFailed=${testsFailed}, testsTotal=${testsTotal}`
-  );
+    console.log(
+      `[TDD Logging] Ejecución guardada: executionId=${executionId}, branch=${gitContext.branchName || '(no branch)'}, commit=${commitId || '(manual)'}, testsPassed=${testsPassed}, testsFailed=${testsFailed}, testsTotal=${testsTotal}`
+    );
   } catch (persistError) {
     logError('No se pudo guardar la ejecución:', persistError);
     persistenceError = persistError;
@@ -150,19 +121,57 @@ async function extractAndAddObject(reportFile, store) {
   return {
     executionId,
     commitId,
-    exitCode,
-    success,
+    exitCode: 0,
+    success: true,
     testsPassed,
     testsFailed,
     testsTotal,
-    durationMs,
+    durationMs: 0,
     report,
-    jestError,
+    jestError: null,
     persistenceError
   };
 }
 
-async function main(store = new LocalTddStore(), run = extractAndAddObject) {
+async function extractAndAddObject(reportFile, store) {
+  const startTime = nowIso();
+
+  let childResult;
+  let jestError = null;
+
+  try {
+    childResult = await runCommand(COMMAND, args);
+  } catch (error) {
+    jestError = error;
+    childResult = { code: null };
+  }
+
+  const endTime = nowIso();
+
+  const exitCode =
+    childResult && typeof childResult.code === 'number'
+      ? childResult.code
+      : 1;
+
+  const success = exitCode === 0;
+
+  const durationMs =
+    childResult && typeof childResult.code === 'number'
+      ? Date.parse(endTime) - Date.parse(startTime)
+      : 0;
+
+  const result = await readAndSaveExecution(reportFile, store);
+
+  return {
+    ...result,
+    exitCode,
+    success,
+    durationMs,
+    jestError
+  };
+}
+
+async function main(store = new LocalTddStore(), recordOnly = false) {
   const reportFile = path.join(
     process.cwd(),
     'script',
@@ -178,7 +187,12 @@ async function main(store = new LocalTddStore(), run = extractAndAddObject) {
   }
 
   try {
-    const result = await run(reportFile, store);
+    let result;
+    if (recordOnly) {
+      result = await readAndSaveExecution(reportFile, store);
+    } else {
+      result = await extractAndAddObject(reportFile, store);
+    }
 
     console.log('');
     console.log('TDD execution result:');
@@ -198,7 +212,8 @@ async function main(store = new LocalTddStore(), run = extractAndAddObject) {
 }
 
 if (process.argv[1] && path.basename(process.argv[1]) === 'tddScript.js') {
-  main().catch((error) => {
+  const recordOnly = process.argv.includes('--record-only');
+  main(undefined, recordOnly).catch((error) => {
     console.error('Unhandled TDD runner error:');
     console.error(error);
     process.exitCode = 1;
@@ -207,6 +222,7 @@ if (process.argv[1] && path.basename(process.argv[1]) === 'tddScript.js') {
 
 export {
   extractAndAddObject,
+  readAndSaveExecution,
   TddStore,
   main
 };
