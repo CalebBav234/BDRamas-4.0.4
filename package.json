@@ -9,7 +9,7 @@
         "build": "parcel build index.html",
         "test": "npm run test:unit",
         "test:unit": "jest --runInBand; node ./script/tddScript.js --record-only",
-        "test:integration": "node ./script/test-neon-integration.js",
+        "test:integration": "jest --runInBand --roots ./script --runTestsByPath ./script/__tests__/integration-postgres.test.js",
         "test:app": "node ./script/tddScript.js",
         "test:e2e": "npm run test:app",
         "test:smoke": "npm run test:unit",
