@@ -375,9 +375,15 @@ async function main(store = new LocalTddStore(), mode = 'record') {
     let result;
     if (mode === 'commit-temporals') {
       result = await commitTemporals(store);
-    } else {
-      result = await writeTempExecution(reportFile);
+      console.log('');
+      console.log('TDD execution result:');
+      console.log(`Procesadas: ${result.processed} ejecución(es)`);
+      if (result.errors && result.errors.length > 0) {
+        process.exitCode = 1;
+      }
+      return;
     }
+    result = await writeTempExecution(reportFile);
 
     console.log('');
     console.log('TDD execution result:');
